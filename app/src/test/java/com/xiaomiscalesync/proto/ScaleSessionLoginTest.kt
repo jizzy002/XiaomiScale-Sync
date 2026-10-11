@@ -129,6 +129,32 @@ class ScaleSessionLoginTest {
         }
     }
 
+    // ---------- (b2) scale goes silent mid-handshake: bounded, no hang ----------
+
+    @Test(timeout = 20_000)
+    fun silentScaleAfterRandKeyFailsInsteadOfHanging() = runBlocking<Unit> {
+        val (app, scaleEnd) = loopback()
+        // The scale acks the framed rand_key transfer (all acks flow) and
+        // then never delivers remote_key — the stall regime the session
+        // must survive, not wait out forever.
+        val fake = FakeScale(scaleToken, silentAfterRandKey = true)
+        fake.accept(scaleEnd)
+        try {
+            val session = ScaleSession(fake.watch(app), scaleToken)
+            session.setup()
+
+            val err = assertThrows(ProtocolError::class.java) { runBlocking { session.login() } }
+
+            assertTrue(
+                "message should name the missing value and the bound, was: ${err.message}",
+                err.message.orEmpty().contains("no remote_key on AUTH"),
+            )
+            assertEquals(0, fake.loginCount)
+        } finally {
+            app.close()
+        }
+    }
+
     // ---------- (c) misordered client: LOGIN enabled before the probe ----------
 
     @Test(timeout = 20_000)

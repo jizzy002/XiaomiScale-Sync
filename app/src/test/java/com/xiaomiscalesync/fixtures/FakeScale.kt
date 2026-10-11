@@ -54,6 +54,13 @@ class FakeScale(
     val token: ByteArray,
     var maxValue: Int = 244,
     val failLoginUnlessOrdered: Boolean = false,
+    /**
+     * Test hardening: accept (ack) the framed rand_key transfer but then
+     * never deliver remote_key/remote_info — the scale went silent
+     * mid-handshake while every ack still flowed. The session's value
+     * waits must surface this as a [ProtocolError], not hang.
+     */
+    val silentAfterRandKey: Boolean = false,
 ) {
 
     /** Scale-side end of the loopback; bound by [accept]. */
@@ -253,6 +260,11 @@ class FakeScale(
                 .format(TAG_RAND_KEY, tag, data.size))
         }
         randKey = data
+        if (silentAfterRandKey) {
+            // The transfer was acked; the scale then goes silent — no
+            // remote_key, no remote_info, no further reply.
+            return
+        }
         val keys = sessionKeys(randKey, REMOTE_KEY)
         sendDirect(t, CharId.AUTH, TAG_REMOTE_KEY, REMOTE_KEY)
         sendDirect(t, CharId.AUTH, TAG_REMOTE_INFO, hmac(keys.devKey, REMOTE_KEY + randKey))

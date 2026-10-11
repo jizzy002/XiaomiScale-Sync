@@ -114,14 +114,17 @@ class ScaleSession(
         transport.write(CharId.LOGIN, LOGIN_TRIGGER)
         Framing.sendValue(transport, CharId.AUTH, TAG_RAND_KEY, randKey, maxValue)
 
-        val (remoteKeyTag, remoteKey) = Framing.recvValue(transport, CharId.AUTH)
+        // Bounded like every other handshake step (the framing layer's
+        // first-frame wait is untimed by design for the receive loop, but
+        // mid-handshake silence is the stall this session must survive).
+        val (remoteKeyTag, remoteKey) = awaitValue(CharId.AUTH, "remote_key")
         if (remoteKeyTag != TAG_REMOTE_KEY || remoteKey.size != REMOTE_KEY_BYTES) {
             throw ProtocolError(
                 "expected remote_key (tag 0x%02x, %d bytes), got tag 0x%02x, %d bytes"
                     .format(TAG_REMOTE_KEY, REMOTE_KEY_BYTES, remoteKeyTag, remoteKey.size),
             )
         }
-        val (remoteInfoTag, remoteInfo) = Framing.recvValue(transport, CharId.AUTH)
+        val (remoteInfoTag, remoteInfo) = awaitValue(CharId.AUTH, "remote_info")
         if (remoteInfoTag != TAG_REMOTE_INFO || remoteInfo.size != REMOTE_INFO_BYTES) {
             throw ProtocolError(
                 "expected remote_info (tag 0x%02x, %d bytes), got tag 0x%02x, %d bytes"
@@ -161,6 +164,19 @@ class ScaleSession(
         throw ProtocolError("no $what on $char within ${Framing.ACK_TIMEOUT_MS}ms")
     } catch (e: ClosedReceiveChannelException) {
         throw ProtocolError("$char: link closed while waiting for the $what")
+    }
+
+    /**
+     * One framed/direct value, bounded like every other handshake step:
+     * [Framing.recvValue]'s first-frame wait is untimed by design (a
+     * receive loop may idle between values), but mid-handshake silence is
+     * a stall, so expiry surfaces as [ProtocolError]. A closed link is
+     * already a [ProtocolError] inside [Framing.recvValue].
+     */
+    private suspend fun awaitValue(char: CharId, what: String): Pair<Int, ByteArray> = try {
+        withTimeout(Framing.ACK_TIMEOUT_MS) { Framing.recvValue(transport, char) }
+    } catch (e: TimeoutCancellationException) {
+        throw ProtocolError("no $what on $char within ${Framing.ACK_TIMEOUT_MS}ms")
     }
 
     private fun expectPrefix(frame: ByteArray, prefix: ByteArray, what: String) {
