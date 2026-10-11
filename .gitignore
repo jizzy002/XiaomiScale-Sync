@@ -10,6 +10,7 @@ local.properties
 captures/
 *.apk
 *.aab
+.kotlin/
 
 # IDE
 .idea/
