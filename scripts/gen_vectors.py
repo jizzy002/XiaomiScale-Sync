@@ -9,6 +9,10 @@ Fixtures:
   ccm_no_aad        AES-CCM (tag=4), 13-byte nonce, no AAD
   ccm_aad           AES-CCM (tag=4), spec-style session nonce
                     iv(4) || 00000000(4) || ctr_le32(4) (12 bytes), with AAD
+  session_enc       AES-CCM (tag=4), spec-style session nonce, no AAD —
+                    the exact post-login channel layout: the value is
+                    ctr_le16 || ciphertext||tag; the CTR in the frame is
+                    the same number used in the nonce
   hkdf_login        HKDF-SHA256, info=b"mible-login-info", L=64
   hkdf_rfc5869_tc1  RFC 5869 Appendix A.1 Test Case 1 (independent KAT)
 
@@ -81,6 +85,37 @@ fixtures.append(
         "aad": hx(ccm_aad_bytes),
         "plaintext": hx(ccm_aad_plaintext),
         "ciphertext": hx(ccm_aad_ciphertext),
+    }
+)
+
+# --- session_enc: post-login session channel encryption ---------------------
+# The layout ScaleSession uses on PROP: value = ctr_le16 || (ciphertext||
+# tag) where the CTR in the frame is the same number as the nonce's ctr_le32.
+# The plaintext below is a real MIoT message: an OP_HELLO (0xf0) for tid 1
+# (`len=0x0005|0x2000`, `tid=1`, `op=0xf0`, no body).
+
+session_enc_key = bytes.fromhex("0f0e0d0c0b0a09080706050403020100")
+session_enc_iv = bytes.fromhex("01020304")
+session_enc_ctr = 0x0102  # 258: big enough that le32 differs from be32
+session_enc_nonce = (
+    session_enc_iv + b"\x00\x00\x00\x00" + session_enc_ctr.to_bytes(4, "little")
+)
+assert len(session_enc_nonce) == 12
+session_enc_plaintext = bytes.fromhex("05200100f0")
+session_enc_ciphertext = AESCCM(session_enc_key, tag_length=TAG_LENGTH).encrypt(
+    session_enc_nonce, session_enc_plaintext, None
+)
+fixtures.append(
+    {
+        "name": "session_enc",
+        "type": "ccm",
+        "key": hx(session_enc_key),
+        "nonce": hx(session_enc_nonce),
+        "aad": None,
+        "plaintext": hx(session_enc_plaintext),
+        "ciphertext": hx(session_enc_ciphertext),
+        "iv": hx(session_enc_iv),
+        "ctr": session_enc_ctr,
     }
 )
 

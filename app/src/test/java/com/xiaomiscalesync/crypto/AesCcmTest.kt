@@ -15,8 +15,8 @@ class AesCcmTest {
         Vectors.load("crypto_vectors").filterIsInstance<VectorFixture.Ccm>()
 
     @Test
-    fun loadsBothCcmFixtures() {
-        assertEquals(listOf("ccm_no_aad", "ccm_aad"), fixtures.map { it.name })
+    fun loadsAllCcmFixtures() {
+        assertEquals(listOf("ccm_no_aad", "ccm_aad", "session_enc"), fixtures.map { it.name })
     }
 
     @Test

@@ -79,8 +79,15 @@ object Framing {
      * frame with no timeout). Mid-transfer parcel gaps do time out, so a
      * transfer that dies half-way cannot wedge the session.
      */
-    suspend fun recvValue(t: BleTransport, source: CharId): Pair<Int, ByteArray> {
-        val first = receive(t, source)
+    suspend fun recvValue(t: BleTransport, source: CharId): Pair<Int, ByteArray> =
+        recvValue(t, source, receive(t, source))
+
+    /**
+     * Same as [recvValue], but the caller has already read the first frame
+     * (e.g. a receive loop that must classify every frame itself — acks
+     * for its own sends versus the start of an incoming value).
+     */
+    suspend fun recvValue(t: BleTransport, source: CharId, first: ByteArray): Pair<Int, ByteArray> {
         if (first.size >= 4 && first[0] == 0.toByte() && first[1] == 0.toByte() && first[2] == 0x02.toByte()) {
             t.write(source, BYTES_ACK)
             return (first[3].toInt() and 0xFF) to first.copyOfRange(4, first.size)

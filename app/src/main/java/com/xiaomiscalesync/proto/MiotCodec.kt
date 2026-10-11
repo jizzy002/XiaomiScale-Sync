@@ -131,6 +131,21 @@ object MiotCodec {
             params.fold(ByteArray(0)) { acc, p -> acc + p }
     }
 
+    /** Builds a result body `<status:le16>[<n><params>]` (no header). */
+    fun result(status: Int, params: List<ByteArray>): ByteArray {
+        require(params.size <= 0xFF) { "too many params: ${params.size}" }
+        if (params.isEmpty()) return le16(status)
+        return le16(status) + byteArrayOf(params.size.toByte()) +
+            params.fold(ByteArray(0)) { acc, p -> acc + p }
+    }
+
+    /** Builds an event body `<siid><eiid><0x00><n><params>` (no header). */
+    fun event(siid: Int, eiid: Int, params: List<ByteArray>): ByteArray {
+        require(params.size <= 0xFF) { "too many params: ${params.size}" }
+        return byteArrayOf(siid.toByte(), eiid.toByte(), 0, params.size.toByte()) +
+            params.fold(ByteArray(0)) { acc, p -> acc + p }
+    }
+
     private fun decodeParams(buf: ByteArray, offset: Int, count: Int): Map<Int, Any> {
         val params = LinkedHashMap<Int, Any>(count)
         var pos = offset
@@ -182,4 +197,57 @@ object MiotCodec {
         for (i in len - 1 downTo 0) v = (v shl 8) or (buf[at + i].toInt() and 0xFF)
         return v
     }
+}
+
+/** One stored weigh-in, as the scale's event 6.1 records it. */
+data class StoredRecord(
+    val no: Long,
+    val mid: Long,
+    val userType: Int,
+    val weightGrams: Int,
+    val flag: Int,
+    val ts: Long,
+)
+
+/**
+ * The records string of event 6.1: `no,mid,user_type,weight_g,flag,unix_ts`
+ * records joined by `_` (the scale's own decimal formatting, no spaces) —
+ * e.g. `41,1,1,8025,0,1790000000_42,0,0,7260,2,1790000060`.
+ */
+object StoredRecords {
+
+    /** Parses one records string; an empty string is no records. */
+    fun parse(text: String): List<StoredRecord> {
+        if (text.isEmpty()) return emptyList()
+        return text.split("_").map { parseRecord(it) }
+    }
+
+    private fun parseRecord(record: String): StoredRecord {
+        val f = record.split(",")
+        if (f.size != FIELDS) {
+            throw ProtocolError("bad stored record ($FIELDS comma fields expected): '$record'")
+        }
+        return StoredRecord(
+            no = long(f[0], record),
+            mid = long(f[1], record),
+            userType = int(f[2], record),
+            weightGrams = int(f[3], record),
+            flag = int(f[4], record),
+            ts = long(f[5], record),
+        )
+    }
+
+    private fun long(field: String, record: String): Long =
+        field.trim().toLongOrNull()
+            ?: throw ProtocolError("bad stored record field '$field' in '$record'")
+
+    private fun int(field: String, record: String): Int {
+        val v = long(field, record)
+        if (v < 0 || v > Int.MAX_VALUE) {
+            throw ProtocolError("stored record field out of int range: '$field' in '$record'")
+        }
+        return v.toInt()
+    }
+
+    private const val FIELDS = 6
 }

@@ -1,12 +1,27 @@
 package com.xiaomiscalesync.proto
 
+import com.xiaomiscalesync.crypto.AesCcm
+import com.xiaomiscalesync.crypto.AuthenticationMismatch
 import com.xiaomiscalesync.crypto.Hkdf
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -71,6 +86,54 @@ class ScaleSession(
     var keys: SessionKeys? = null
         private set
 
+    /** Stored weigh-ins the scale pushes (event siid 6, after a 6.1 fetch). */
+    val storedEvents: Channel<MiotMessage> = Channel(Channel.UNLIMITED)
+
+    /** Live weigh-in events the scale pushes (event siid 5). */
+    val liveEvents: Channel<MiotMessage> = Channel(Channel.UNLIMITED)
+
+    /** Pending result/hello futures, keyed by the tid they were sent with. */
+    private val pending = ConcurrentHashMap<Int, CompletableDeferred<MiotMessage>>()
+
+    /**
+     * Outgoing (app→scale) encryption counter: starts at 0 per session and
+     * increases by 1 per sent message; the same number goes into the
+     * value's `ctr_le16` frame and the CCM nonce.
+     */
+    private var appCtr = 0
+
+    /** Next outgoing tid (the scale picks its own tids for its events). */
+    private val nextTid = AtomicInteger(1)
+
+    /** Serialises outgoing sends so ack pairing on [acks] stays unambiguous. */
+    private val sendMutex = Mutex()
+
+    private var pumpJob: Job? = null
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Ack frames (`<rdy>`/`<ok>`/`<ack>`) the pump forwards from PROP while
+     * a send waits on them. The pump is the sole consumer of the PROP
+     * notification channel — it classifies every frame — so outgoing
+     * sends await their acks here instead of competing for the channel.
+     */
+    private val acks = Channel<ByteArray>(Channel.UNLIMITED)
+
+    /**
+     * The transport outgoing sends see: writes pass through, but reads on
+     * PROP come from [acks] (fed by the pump) — [Framing.sendValue] then
+     * works unchanged while the pump keeps consuming everything else.
+     */
+    private val sendTransport: BleTransport = object : BleTransport {
+        override val notifications: Map<CharId, Channel<ByteArray>> =
+            transport.notifications + (CharId.PROP to acks)
+
+        override suspend fun write(to: CharId, bytes: ByteArray) = transport.write(to, bytes)
+        override suspend fun close() = transport.close()
+        override suspend fun enableNotifications(char: CharId) = transport.enableNotifications(char)
+    }
+
     /**
      * Runs the setup order the scale requires: enable AUTH/CMD/PROP, the
      * `a4` payload-size probe (echoing both probe frames back with byte 2
@@ -133,7 +196,6 @@ class ScaleSession(
         }
 
         val derived = deriveKeys(token, randKey, remoteKey)
-        keys = derived
         val expectedRemoteInfo = hmac(derived.devKey, remoteKey + randKey)
         if (!MessageDigest.isEqual(expectedRemoteInfo, remoteInfo)) {
             throw ProtocolError(
@@ -141,6 +203,7 @@ class ScaleSession(
                     "'TOKEN' field, not the BLE KEY/bindkey)",
             )
         }
+        keys = derived
 
         val loginInfo = hmac(derived.appKey, randKey + remoteKey)
         Framing.sendValue(transport, CharId.AUTH, TAG_LOGIN_INFO, loginInfo, maxValue)
@@ -152,8 +215,168 @@ class ScaleSession(
         log("login OK")
     }
 
-    /** Closes the link. */
-    suspend fun close() = transport.close()
+    // ---------- encrypted channel ----------
+
+    /**
+     * Starts the PROP receive loop — the sole consumer of PROP
+     * notifications. Each incoming value is decrypted (`dev_key`/`dev_iv`,
+     * the CTR taken from the value's own frame) and dispatched by op:
+     * OP_RESULT and OP_HELLO resolve the pending future registered under
+     * their tid, OP_EVENT siid 6 → [storedEvents], siid 5 → [liveEvents],
+     * everything else is logged and ignored. A second call is a no-op.
+     */
+    suspend fun startPump() {
+        check(keys != null) { "login before startPump" }
+        if (pumpJob != null) return
+        pumpJob = scope.launch { pump() }
+    }
+
+    /** Sends OP_HELLO and awaits the scale's echo (same tid). */
+    suspend fun hello(): MiotMessage {
+        val (tid, future) = register()
+        try {
+            sendRequest(MiotCodec.encode(tid, MiotCodec.OP_HELLO, ByteArray(0)))
+            return awaitFuture(tid, future)
+        } finally {
+            pending.remove(tid)
+        }
+    }
+
+    /**
+     * Sends action `<siid>.<aiid>` (params as pre-encoded [MiotCodec.param]
+     * fragments) and awaits its OP_RESULT on the same tid: 6 s of silence
+     * or a non-zero status surface as [ProtocolError]. Dispatch is by tid,
+     * so events arriving meanwhile never disturb this wait.
+     */
+    suspend fun action(siid: Int, aiid: Int, vararg params: ByteArray): MiotMessage {
+        val (tid, future) = register()
+        try {
+            val body = MiotCodec.action(siid, aiid, params.toList())
+            sendRequest(MiotCodec.encode(tid, MiotCodec.OP_ACTION, body))
+            val result = awaitFuture(tid, future)
+            if (result.status != 0) {
+                throw ProtocolError("action $siid.$aiid failed: status ${result.status}")
+            }
+            return result
+        } finally {
+            pending.remove(tid)
+        }
+    }
+
+    /** Stops the pump, closes the event queues, and tears down the link. */
+    suspend fun close() {
+        pumpJob?.cancelAndJoin()
+        storedEvents.close()
+        liveEvents.close()
+        acks.close()
+        failPending(ProtocolError("session closed before a reply arrived"))
+        transport.close()
+    }
+
+    // ---------- channel internals ----------
+
+    private suspend fun pump() {
+        val prop = transport.notifications.getValue(CharId.PROP)
+        try {
+            while (true) {
+                val frame = prop.receive()
+                when {
+                    frame.contentEquals(BYTES_RDY) || frame.contentEquals(BYTES_OK) ||
+                        frame.contentEquals(BYTES_ACK) -> acks.send(frame)
+
+                    isValueStart(frame) -> {
+                        val (_, value) = Framing.recvValue(transport, CharId.PROP, frame)
+                        dispatch(decryptAndDecode(value))
+                    }
+
+                    else -> throw ProtocolError("PROP: unexpected frame ${frame.hex()}")
+                }
+            }
+        } catch (e: ClosedReceiveChannelException) {
+            log("pump: link closed")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            log("pump: failed: ${e.message}")
+            failPending(ProtocolError("session pump failed: ${e.message}"))
+        }
+    }
+
+    /** Routes one decrypted message: results/hellos by tid, events by siid. */
+    private fun dispatch(msg: MiotMessage) {
+        when (msg.op) {
+            MiotCodec.OP_RESULT, MiotCodec.OP_HELLO -> {
+                val future = pending.remove(msg.tid)
+                if (future == null) {
+                    log("pump: no pending request for tid ${msg.tid} (op 0x${msg.op.toString(16)})")
+                } else {
+                    future.complete(msg)
+                }
+            }
+
+            MiotCodec.OP_EVENT -> when (msg.siid) {
+                SIID_STORED -> storedEvents.trySend(msg)
+                SIID_LIVE -> liveEvents.trySend(msg)
+                else -> log("pump: ignoring event ${msg.siid}.${msg.iid}")
+            }
+
+            else -> log("pump: ignoring message op 0x${msg.op.toString(16)} tid ${msg.tid}")
+        }
+    }
+
+    private fun decryptAndDecode(value: ByteArray): MiotMessage {
+        val k = keys ?: throw ProtocolError("session value arrived before login")
+        val plaintext = try {
+            // The CTR comes from the value's own frame; no counter guessing.
+            decryptValue(k.devKey, k.devIv, value)
+        } catch (e: AuthenticationMismatch) {
+            throw ProtocolError("session decrypt failed: ${e.message}")
+        }
+        return MiotCodec.decode(plaintext)
+    }
+
+    private fun isValueStart(frame: ByteArray): Boolean =
+        (frame.size >= 4 && frame[0] == 0.toByte() && frame[1] == 0.toByte() && frame[2] == 0x02.toByte()) ||
+            (frame.size == 6 && frame[0] == 0.toByte() && frame[1] == 0.toByte() && frame[2] == 0.toByte())
+
+    private fun failPending(error: Throwable) {
+        for (future in pending.values) future.completeExceptionally(error)
+        pending.clear()
+    }
+
+    /** Encrypts and sends one app→scale message on PROP (framed). */
+    private suspend fun sendRequest(plaintext: ByteArray) {
+        val k = keys ?: throw ProtocolError("not logged in")
+        sendMutex.withLock {
+            val ctr = appCtr
+            appCtr += 1
+            val value = encryptValue(k.appKey, k.appIv, ctr, plaintext)
+            try {
+                Framing.sendValue(sendTransport, CharId.PROP, TAG_SESSION, value, maxValue)
+            } catch (e: Throwable) {
+                // A half-dead transfer can leave an ack in flight; drop it
+                // so the next send cannot pair with a stale ack.
+                while (acks.tryReceive().isSuccess) { /* drain */ }
+                throw e
+            }
+        }
+    }
+
+    private fun register(): Pair<Int, CompletableDeferred<MiotMessage>> {
+        val tid = nextTid.getAndIncrement() and 0xFFFF
+        val future = CompletableDeferred<MiotMessage>()
+        pending[tid] = future
+        return tid to future
+    }
+
+    private suspend fun awaitFuture(
+        tid: Int,
+        future: CompletableDeferred<MiotMessage>,
+    ): MiotMessage = try {
+        withTimeout(RESULT_TIMEOUT_MS) { future.await() }
+    } catch (e: TimeoutCancellationException) {
+        throw ProtocolError("no reply for tid $tid within ${RESULT_TIMEOUT_MS}ms")
+    }
 
     // ---------- helpers ----------
 
@@ -208,6 +431,55 @@ class ScaleSession(
         private val LOGIN_TRIGGER = hex("24000000")
         private val LOGIN_OK = hex("21000000")
         private val LOGIN_INFO = "mible-login-info".toByteArray(Charsets.US_ASCII)
+
+        /** The framing tag session values use on PROP. */
+        private const val TAG_SESSION = 0x01
+
+        /** MIoT service ids the pump routes events by. */
+        private const val SIID_LIVE = 5
+        private const val SIID_STORED = 6
+
+        private const val IV_BYTES = 4
+
+        /** How long [hello]/[action] wait for their result on the same tid. */
+        const val RESULT_TIMEOUT_MS = 6_000L
+
+        private val ZERO4 = ByteArray(4)
+        private val BYTES_RDY = hex(Framing.RCV_RDY)
+        private val BYTES_OK = hex(Framing.RCV_OK)
+        private val BYTES_ACK = hex(Framing.RCV_ACK)
+
+        /**
+         * One session value, both directions: `<ctr_le16><AES-CCM ct|tag(4)>`
+         * where the nonce is `iv(4) || 00000000 || ctr_le32` with no AAD —
+         * the CTR in the frame and the CTR in the nonce are the same
+         * number (`app_key`/`app_iv` outbound, `dev_key`/`dev_iv` inbound).
+         */
+        fun encryptValue(key: ByteArray, iv: ByteArray, ctr: Int, plaintext: ByteArray): ByteArray =
+            le16(ctr) + AesCcm.encrypt(key, sessionNonce(iv, ctr), null, plaintext)
+
+        /** Decrypts one session value; the CTR comes from the frame itself. */
+        fun decryptValue(key: ByteArray, iv: ByteArray, value: ByteArray): ByteArray {
+            require(value.size >= 2 + AesCcm.TAG_LENGTH_BYTES) {
+                "session value too short for ctr+tag: ${value.size} bytes"
+            }
+            val ctr = u16(value, 0)
+            return AesCcm.decrypt(key, sessionNonce(iv, ctr), null, value.copyOfRange(2, value.size))
+        }
+
+        /** `iv(4) || 00000000 || ctr_le32` — the 12-byte CCM nonce of one message. */
+        fun sessionNonce(iv: ByteArray, ctr: Int): ByteArray {
+            require(iv.size == IV_BYTES) { "session iv must be $IV_BYTES bytes, was ${iv.size}" }
+            return iv + ZERO4 + le32(ctr)
+        }
+
+        private fun le16(v: Int): ByteArray =
+            byteArrayOf((v and 0xFF).toByte(), ((v shr 8) and 0xFF).toByte())
+
+        private fun le32(v: Int): ByteArray = ByteArray(4) { i -> (v shr (8 * i)).toByte() }
+
+        private fun u16(buf: ByteArray, at: Int): Int =
+            (buf[at].toInt() and 0xFF) or ((buf[at + 1].toInt() and 0xFF) shl 8)
 
         private val random = SecureRandom()
 

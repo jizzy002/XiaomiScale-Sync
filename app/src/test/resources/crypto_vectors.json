@@ -18,6 +18,17 @@
     "ciphertext": "fa37014ef37f230d8037878c0224391d0a9f4b91f5c2fa634c"
   },
   {
+    "name": "session_enc",
+    "type": "ccm",
+    "key": "0f0e0d0c0b0a09080706050403020100",
+    "nonce": "010203040000000002010000",
+    "aad": null,
+    "plaintext": "05200100f0",
+    "ciphertext": "c0a68bba8728303554",
+    "iv": "01020304",
+    "ctr": 258
+  },
+  {
     "name": "hkdf_login",
     "type": "hkdf",
     "ikm": "000102030405060708090a0b0c0d0e0f",

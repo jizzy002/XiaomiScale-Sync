@@ -4,7 +4,11 @@ import com.xiaomiscalesync.crypto.Hkdf
 import com.xiaomiscalesync.proto.BleTransport
 import com.xiaomiscalesync.proto.CharId
 import com.xiaomiscalesync.proto.Framing
+import com.xiaomiscalesync.proto.MiotCodec
+import com.xiaomiscalesync.proto.MiotMessage
+import com.xiaomiscalesync.proto.ParamType
 import com.xiaomiscalesync.proto.ProtocolError
+import com.xiaomiscalesync.proto.ScaleSession
 import com.xiaomiscalesync.proto.SessionKeys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -102,6 +106,46 @@ class FakeScale(
 
     /** When the app enabled notifications on each characteristic (nanoTime). */
     private val enabledAt = ConcurrentHashMap<CharId, Long>()
+
+    // ---------- session channel (post-login) ----------
+
+    /** The session keys the completed miauth login derived (both sides derive the same). */
+    var keys: SessionKeys? = null
+        private set
+
+    /** The records string the scale answers 6.1 (and 7.1's count) with. */
+    var recordsString: String = DEFAULT_RECORDS
+
+    /** How many stored records [recordsString] holds. */
+    val storedCount: Int get() = if (recordsString.isEmpty()) 0 else recordsString.split("_").size
+
+    /** Record numbers the app deleted via action 6.2, in order. */
+    val deletedRecordNos = CopyOnWriteArrayList<Long>()
+
+    /** Every action the app sent, as (siid, aiid), in order. */
+    val actionsReceived = CopyOnWriteArrayList<Pair<Int, Int>>()
+
+    /** App→scale session counters observed in the values' frames, in order. */
+    val appCounters = CopyOnWriteArrayList<Int>()
+
+    /**
+     * When set, action 6.1 injects this live 5.3 event (weightGrams,
+     * stable) toward the app the moment the action arrives — strictly
+     * before its result goes on the wire.
+     */
+    var liveOnStoredFetch: Pair<Int, Boolean>? = null
+
+    /** When non-zero, every action result carries this status instead of 0. */
+    var failActionStatus: Int = 0
+
+    /** When true, action results are dropped — the app's wait must time out. */
+    var dropActionResults: Boolean = false
+
+    /** Scale→app session counter (dev side): 0 per session, +1 per message. */
+    private var devCtr = 0
+
+    /** Tids the scale uses for its own events (distinct from app tids). */
+    private var eventTid = EVENT_TID_BASE
 
     /** When the `a4` arrived / the probe completed (nanoTime; 0 = not yet). */
     @Volatile
@@ -236,8 +280,12 @@ class FakeScale(
                 }
 
                 isHeader(frame) -> {
-                    receiveFramed(t, char, frame)
+                    val (_, data) = receiveFramed(t, char, frame)
                     stage = Stage.IDLE
+                    if (char == CharId.PROP) {
+                        // Post-login the app sends its session messages on PROP.
+                        handleSessionValue(t, data)
+                    }
                 }
 
                 else -> throw ProtocolError("scale got an unexpected frame on $char: ${frame.hex()}")
@@ -265,9 +313,9 @@ class FakeScale(
             // remote_key, no remote_info, no further reply.
             return
         }
-        val keys = sessionKeys(randKey, REMOTE_KEY)
+        val derived = sessionKeys(randKey, REMOTE_KEY)
         sendDirect(t, CharId.AUTH, TAG_REMOTE_KEY, REMOTE_KEY)
-        sendDirect(t, CharId.AUTH, TAG_REMOTE_INFO, hmac(keys.devKey, REMOTE_KEY + randKey))
+        sendDirect(t, CharId.AUTH, TAG_REMOTE_INFO, hmac(derived.devKey, REMOTE_KEY + randKey))
         stage = Stage.WAIT_LOGIN_INFO
     }
 
@@ -281,15 +329,111 @@ class FakeScale(
             throw ProtocolError("expected login_info (tag 0x%02x, 32 bytes), got tag 0x%02x, %d bytes"
                 .format(TAG_LOGIN_INFO, tag, data.size))
         }
-        val keys = sessionKeys(randKey, REMOTE_KEY)
-        val expected = hmac(keys.appKey, randKey + REMOTE_KEY)
+        val derived = sessionKeys(randKey, REMOTE_KEY)
+        val expected = hmac(derived.appKey, randKey + REMOTE_KEY)
         if (!MessageDigest.isEqual(expected, data)) {
             throw ProtocolError("scale got a login_info HMAC mismatch: ${data.hex()}")
         }
         t.write(CharId.LOGIN, LOGIN_OK)
+        keys = derived
         loginCount++
         stage = Stage.IDLE
     }
+
+    /**
+     * One encrypted session value from the app on PROP: decrypt it with
+     * the app-side keys (CTR from the value's frame) and answer — OP_HELLO
+     * echo, action 7.1 (profile), 6.1 (fetch stored), 6.2 (delete).
+     */
+    private suspend fun handleSessionValue(t: BleTransport, data: ByteArray) {
+        val k = keys ?: throw ProtocolError("scale got a session value before login")
+        appCounters += u16(data, 0)
+        val msg = MiotCodec.decode(ScaleSession.decryptValue(k.appKey, k.appIv, data))
+        when (msg.op) {
+            MiotCodec.OP_HELLO -> replySession(t, msg.tid, MiotCodec.OP_HELLO, ByteArray(0))
+            MiotCodec.OP_ACTION -> handleAction(t, msg)
+            else -> throw ProtocolError("scale got an unexpected session op 0x${msg.op.toString(16)}")
+        }
+    }
+
+    private suspend fun handleAction(t: BleTransport, msg: MiotMessage) {
+        actionsReceived += msg.siid to msg.iid
+        if (dropActionResults) return // every action goes unanswered on purpose
+        when {
+            msg.siid == 7 && msg.iid == 1 -> sendResult(
+                t,
+                msg.tid,
+                failActionStatus,
+                listOf(
+                    MiotCodec.param(2, ParamType.U16, storedCount),
+                    MiotCodec.param(5, ParamType.STRING, "2.1.2_0008.0010"),
+                ),
+            )
+
+            msg.siid == 6 && msg.iid == 1 -> {
+                // Injected strictly before the result goes on the wire, so
+                // the live event is genuinely in flight while the app still
+                // awaits the 6.1 result (the interleaving test relies on it).
+                liveOnStoredFetch?.let { emitLive(it.first, it.second) }
+                sendResult(t, msg.tid, failActionStatus, listOf(MiotCodec.param(3, ParamType.U16, storedCount)))
+                if (failActionStatus == 0 && storedCount > 0) {
+                    replySession(
+                        t,
+                        msg.tid,
+                        MiotCodec.OP_EVENT,
+                        MiotCodec.event(6, 1, listOf(MiotCodec.param(1, ParamType.STRING, recordsString))),
+                    )
+                }
+            }
+
+            msg.siid == 6 && msg.iid == 2 -> {
+                val numbers = msg.params[2] as? String
+                    ?: throw ProtocolError("scale expected a string param 2 for 6.2, got ${msg.params[2]}")
+                if (numbers.isEmpty()) throw ProtocolError("scale got an empty 6.2 record list")
+                for (part in numbers.split(",")) {
+                    val no = part.trim().toLongOrNull()
+                    if (no == null || no < 0) {
+                        throw ProtocolError("scale got a malformed 6.2 record number: '$part'")
+                    }
+                    deletedRecordNos += no
+                }
+                sendResult(t, msg.tid, failActionStatus, emptyList())
+            }
+
+            else -> throw ProtocolError("scale got an unknown action ${msg.siid}.${msg.iid}")
+        }
+    }
+
+    private suspend fun sendResult(t: BleTransport, tid: Int, status: Int, params: List<ByteArray>) {
+        replySession(t, tid, MiotCodec.OP_RESULT, MiotCodec.result(status, params))
+    }
+
+    /** Encrypts one scale→app message with the dev-side keys and counter. */
+    private suspend fun replySession(t: BleTransport, tid: Int, op: Int, body: ByteArray) {
+        val k = keys ?: throw ProtocolError("scale has no session keys")
+        val value = ScaleSession.encryptValue(k.devKey, k.devIv, devCtr, MiotCodec.encode(tid, op, body))
+        devCtr += 1
+        sendFramed(CharId.PROP, TAG_SESSION, value)
+    }
+
+    /**
+     * Injects a live 5.3 weigh-in event (p2 = stable, p3 = weight) toward
+     * the app — tests use this to race events against pending requests.
+     */
+    suspend fun emitLive(weightGrams: Int, stable: Boolean) {
+        check(::transport.isInitialized) { "call accept() first" }
+        val body = MiotCodec.event(
+            5,
+            3,
+            listOf(
+                MiotCodec.param(2, ParamType.U8, if (stable) 1 else 0),
+                MiotCodec.param(3, ParamType.U16, weightGrams),
+            ),
+        )
+        replySession(transport, nextEventTid(), MiotCodec.OP_EVENT, body)
+    }
+
+    private fun nextEventTid(): Int = (eventTid++).and(0xFFFF)
 
     /**
      * The reference's stall, simulated: with [failLoginUnlessOrdered], the
@@ -401,6 +545,24 @@ class FakeScale(
         const val TAG_REMOTE_INFO = 0x0c
         const val TAG_REMOTE_KEY = 0x0d
         const val TAG_LOGIN_INFO = 0x0a
+
+        /** The framing tag session values use on PROP (both directions). */
+        const val TAG_SESSION = 0x01
+
+        /** First tid the scale uses for its own events. */
+        const val EVENT_TID_BASE = 0x7000
+
+        /**
+         * The default records fixture for action 6.1: the two pinned
+         * records first (`41,…,flag 0` and `42,…,flag 2, mid 0`), then
+         * enough more to push the encrypted event value past one write —
+         * a framed transfer of >=2 parcels at the loopback's 244-byte
+         * maxValue (242-byte chunks).
+         */
+        val DEFAULT_RECORDS: String = (
+            listOf("41,1,1,8025,0,1790000000", "42,0,0,7260,2,1790000060") +
+                (0 until 19).map { i -> "${43 + i},1,1,${7000 + i},0,${1790000120 + i * 60}" }
+            ).joinToString("_")
 
         /** First probe frame, verbatim from the reference capture. */
         val PROBE_SMALL = hex("0000040006f2")
