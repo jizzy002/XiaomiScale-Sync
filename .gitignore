@@ -1,0 +1,22 @@
+# SDD workspaces (self-ignoring, but belt-and-suspenders)
+.superpowers/
+
+# Gradle / Android
+.gradle/
+build/
+local.properties
+.externalNativeBuild/
+.cxx/
+captures/
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Signing material — never commit
+*.keystore
+*.jks
+*.pepk
