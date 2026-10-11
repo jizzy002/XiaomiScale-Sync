@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the committed AES-CCM / HKDF test-vector fixtures.
+"""Generate the committed AES-CCM / HKDF / MiBeacon test-vector fixtures.
 
-Emits a JSON array of fixtures consumed by the Kotlin unit tests in
-`app/src/test/java/com/xiaomiscalesync/crypto/` (the tests read the JSON;
-they never call Python).
+Emits JSON arrays of fixtures consumed by the Kotlin unit tests (the tests
+read the JSON; they never call Python).
 
-Fixtures:
+Default (crypto_vectors.json), fixtures:
   ccm_no_aad        AES-CCM (tag=4), 13-byte nonce, no AAD
   ccm_aad           AES-CCM (tag=4), spec-style session nonce
                     iv(4) || 00000000(4) || ctr_le32(4) (12 bytes), with AAD
@@ -16,12 +15,21 @@ Fixtures:
   hkdf_login        HKDF-SHA256, info=b"mible-login-info", L=64
   hkdf_rfc5869_tc1  RFC 5869 Appendix A.1 Test Case 1 (independent KAT)
 
+With --beacon (beacon_vectors.json), fixtures:
+  beacon_weigh_in   MiBeacon v5 encrypted 0x4e16 weigh-in frame
+                    (fc 0x5948, no MAC field — nonce uses the scale's own)
+  beacon_status     MiBeacon v5 encrypted 0x6623 status frame
+                    (fc 0x5958, MAC field included)
+  beacon_solicit    MiBeacon v5 unencrypted "connect to me" frame
+                    (fc 0x5b10, MAC field, no object)
+
 All inputs are fixed dummy (non-secret) bytes so regeneration is
 reproducible; the ccm_no_aad nonce is a random value pinned here for the
 same reason.
 
 Usage:
     python scripts/gen_vectors.py > app/src/test/resources/crypto_vectors.json
+    python scripts/gen_vectors.py --beacon > app/src/test/resources/beacon_vectors.json
 """
 
 import json
@@ -164,5 +172,134 @@ fixtures.append(
     }
 )
 
-json.dump(fixtures, sys.stdout, indent=2)
+# --- beacon fixtures: MiBeacon v5 advertisement decode ----------------------
+# Full advertisement builder mirroring `ble/Beacon.kt`'s decode rules:
+#   service data = fc_le16 || product_le16 || counter(1)
+#                  || [mac_le(6) if fc & 0x10] || [capability(2) if fc & 0x20]
+#                  || payload
+#   encrypted (fc & 0x08): payload = ct || ext_counter(3) || tag(4) with
+#   nonce = mac_le(6) || product_le(2, as it appears) || counter(1)
+#           || ext_counter(3)  and AAD = the single byte 0x11.
+
+BEACON_MAC = "58:2D:34:AA:BB:CC"  # dummy scale MAC (display order)
+BEACON_BIND_KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
+BEACON_PRODUCT = 0x4DCB  # the S200's product id
+BEACON_AAD = b"\x11"
+
+FC_ENCRYPTED = 0x08
+FC_MAC = 0x10
+FC_CAPABILITY = 0x20
+FC_SOLICIT = 0x0200
+
+MAC_LE = bytes.fromhex(BEACON_MAC.replace(":", ""))[::-1]
+
+
+def build_advertisement(
+    frame_control: int,
+    frame_counter: int,
+    ext_counter: int,
+    plaintext: bytes,
+) -> bytes:
+    """Builds MiBeacon v5 service data for one frame.
+
+    `plaintext` is the decrypted object stream for encrypted frames, or the
+    raw payload for unencrypted ones (empty for a plain "connect to me").
+    """
+    out = (
+        frame_control.to_bytes(2, "little")
+        + BEACON_PRODUCT.to_bytes(2, "little")
+        + bytes([frame_counter])
+    )
+    if frame_control & FC_MAC:
+        out += MAC_LE
+    if frame_control & FC_CAPABILITY:
+        out += b"\x00\x00"  # capability field (2 bytes; never set by this scale)
+    if frame_control & FC_ENCRYPTED:
+        nonce = (
+            MAC_LE  # the scale's MAC, little-endian
+            + BEACON_PRODUCT.to_bytes(2, "little")  # product id, as it appears
+            + bytes([frame_counter])
+            + ext_counter.to_bytes(3, "little")
+        )
+        assert len(nonce) == 12
+        ct_and_tag = AESCCM(BEACON_BIND_KEY, tag_length=TAG_LENGTH).encrypt(
+            nonce, plaintext, BEACON_AAD
+        )
+        out += ct_and_tag[:-TAG_LENGTH] + ext_counter.to_bytes(3, "little") + ct_and_tag[-TAG_LENGTH:]
+    else:
+        out += plaintext
+    return out
+
+
+def parse_object_stream(plain: bytes):
+    """Parses `<id:le16><len:u8><value>` objects; stops at a truncated one."""
+    objects, i = [], 0
+    while i + 3 <= len(plain):
+        obj_id = int.from_bytes(plain[i : i + 2], "little")
+        length = plain[i + 2]
+        if i + 3 + length > len(plain):
+            break
+        objects.append((obj_id, plain[i + 3 : i + 3 + length]))
+        i += 3 + length
+    return objects
+
+
+beacon_fixtures = []
+
+
+def beacon_fixture(name, frame_control, frame_counter, ext_counter, plaintext, weigh_in=None):
+    encrypted = bool(frame_control & FC_ENCRYPTED)
+    service_data = build_advertisement(frame_control, frame_counter, ext_counter, plaintext)
+    fixture = {
+        "name": name,
+        "type": "beacon",
+        "mac": BEACON_MAC,
+        "bindKey": hx(BEACON_BIND_KEY),
+        "serviceData": hx(service_data),
+        "frameControl": frame_control,
+        "frameCounter": frame_counter,
+        "solicit": bool(frame_control & FC_SOLICIT),
+        "eventKey": frame_counter * 2**24 + (ext_counter if encrypted else 0),
+        "objects": [
+            {"id": obj_id, "value": hx(value)}
+            for obj_id, value in parse_object_stream(plaintext)
+        ],
+    }
+    if weigh_in is not None:
+        fixture["weighIn"] = weigh_in
+    beacon_fixtures.append(fixture)
+
+
+# beacon_weigh_in: the pinned weigh-in example from the protocol reference —
+# object value `01 2f1c0000 803bb16a` = profile 1, 72.15 kg (weight field in
+# 1/100 kg), 2026-09-21 14:13:20 UTC. `weightGrams` in the fixture carries the
+# raw 1/100 kg value, matching `WeighInObjects.parse`'s pinned output.
+beacon_fixture(
+    name="beacon_weigh_in",
+    frame_control=0x5948,  # encrypted + object, no MAC field
+    frame_counter=42,
+    ext_counter=0x010203,  # big enough that byte order matters
+    plaintext=bytes.fromhex("164e09") + bytes.fromhex("012f1c0000803bb16a"),
+    weigh_in={"profileId": 1, "weightGrams": 7215, "unixTs": 0x6AB13B80},
+)
+
+# beacon_status: the ~50-minute status broadcast, MAC field included.
+beacon_fixture(
+    name="beacon_status",
+    frame_control=0x5958,  # encrypted + MAC + object
+    frame_counter=7,
+    ext_counter=0x000000,
+    plaintext=bytes.fromhex("23660100"),  # object 0x6623, 1 byte 0x00
+)
+
+# beacon_solicit: unencrypted "connect to me" frame — MAC field, no object.
+beacon_fixture(
+    name="beacon_solicit",
+    frame_control=0x5B10,  # bit 9 set, MAC included, not encrypted
+    frame_counter=17,
+    ext_counter=0,
+    plaintext=b"",
+)
+
+json.dump(beacon_fixtures if "--beacon" in sys.argv else fixtures, sys.stdout, indent=2)
 sys.stdout.write("\n")

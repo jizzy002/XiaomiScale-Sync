@@ -1,0 +1,53 @@
+[
+  {
+    "name": "beacon_weigh_in",
+    "type": "beacon",
+    "mac": "58:2D:34:AA:BB:CC",
+    "bindKey": "00112233445566778899aabbccddeeff",
+    "serviceData": "4859cb4d2a2fa76c544e0f9b8fc149548c0302017ae175cd",
+    "frameControl": 22856,
+    "frameCounter": 42,
+    "solicit": false,
+    "eventKey": 704709123,
+    "objects": [
+      {
+        "id": 19990,
+        "value": "012f1c0000803bb16a"
+      }
+    ],
+    "weighIn": {
+      "profileId": 1,
+      "weightGrams": 7215,
+      "unixTs": 1790000000
+    }
+  },
+  {
+    "name": "beacon_status",
+    "type": "beacon",
+    "mac": "58:2D:34:AA:BB:CC",
+    "bindKey": "00112233445566778899aabbccddeeff",
+    "serviceData": "5859cb4d07ccbbaa342d580153ce63000000b662332c",
+    "frameControl": 22872,
+    "frameCounter": 7,
+    "solicit": false,
+    "eventKey": 117440512,
+    "objects": [
+      {
+        "id": 26147,
+        "value": "00"
+      }
+    ]
+  },
+  {
+    "name": "beacon_solicit",
+    "type": "beacon",
+    "mac": "58:2D:34:AA:BB:CC",
+    "bindKey": "00112233445566778899aabbccddeeff",
+    "serviceData": "105bcb4d11ccbbaa342d58",
+    "frameControl": 23312,
+    "frameCounter": 17,
+    "solicit": true,
+    "eventKey": 285212672,
+    "objects": []
+  }
+]
