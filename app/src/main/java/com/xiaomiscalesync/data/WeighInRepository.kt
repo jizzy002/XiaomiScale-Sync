@@ -25,9 +25,13 @@ class WeighInRepository(
             settings = MergeSettings(mid = s.mid.toLongOrNull() ?: 1L, backfillCutoff = s.backfillCutoff),
             nowUnix = nowUnix(),
         )
-        for (row in plan.inserts) dao.insert(row)
+        // Inserts are IGNORE-on-conflict: a concurrent merge that won the race
+        // for the same (recordedAt, weightGrams) key makes Room return -1 here
+        // rather than throw — count only the rows that actually landed.
+        var inserted = 0
+        for (row in plan.inserts) if (dao.insert(row) != -1L) inserted++
         for (f in plan.fills) dao.fillRecordNo(f.id, f.recordNo)
-        return MergeResult(inserted = plan.inserts.size, duplicates = plan.duplicates)
+        return MergeResult(inserted = inserted, duplicates = plan.duplicates)
     }
 
     fun observe(category: Category?): Flow<List<WeighInRecord>> =

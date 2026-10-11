@@ -24,7 +24,10 @@ interface ArchiveDao {
     @Query("SELECT * FROM weigh_ins")
     suspend fun all(): List<WeighInRecord>
 
-    @Insert
+    // IGNORE (not the @Insert default ABORT): the (recordedAt, weightGrams)
+    // unique index means a concurrent merge planning the same key must drop
+    // the duplicate row, not throw and abort the batch.
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(record: WeighInRecord): Long
 
     @Query("UPDATE weigh_ins SET recordNo = :recordNo WHERE id = :id AND recordNo IS NULL")

@@ -25,15 +25,34 @@ class RepositoryFlowTest {
         val rows = MutableStateFlow<List<WeighInRecord>>(emptyList())
         val scaleCleanup = MutableStateFlow<List<Long>>(emptyList())
 
+        /**
+         * Race simulation: when set, this row is committed by a "second writer"
+         * immediately after the next [all] snapshot is taken — i.e. between the
+         * merger's read and the repository's writes, the exact interleaving of
+         * two concurrent merge() calls planning the same key.
+         */
+        var raceRow: WeighInRecord? = null
+
         override fun observeAll(): Flow<List<WeighInRecord>> =
             rows.map { list -> list.sortedByDescending { it.recordedAt } }
 
         override fun observeByCategory(category: Category): Flow<List<WeighInRecord>> =
             rows.map { list -> list.filter { it.category == category }.sortedByDescending { it.recordedAt } }
 
-        override suspend fun all(): List<WeighInRecord> = rows.value
+        override suspend fun all(): List<WeighInRecord> {
+            val snapshot = rows.value // the read both mergers plan against
+            raceRow?.let { r ->
+                raceRow = null
+                rows.value = rows.value + r.copy(id = nextId++) // second writer lands
+            }
+            return snapshot
+        }
 
         override suspend fun insert(record: WeighInRecord): Long {
+            // Unique index on (recordedAt, weightGrams) with OnConflictStrategy.IGNORE:
+            // a conflicting row is silently not inserted and -1 is returned, never a throw.
+            val conflict = rows.value.any { it.recordedAt == record.recordedAt && it.weightGrams == record.weightGrams }
+            if (conflict) return -1L
             val id = nextId++
             rows.value = rows.value + record.copy(id = id)
             return id
@@ -206,9 +225,31 @@ class RepositoryFlowTest {
     }
 
     @Test
+    fun mergeIsBenignWhenASecondWriterWinsTheSameKey() = runBlocking {
+        val (repo, dao) = repo()
+        // A conflicting row for the exact dedupe key the incoming weigh-in will
+        // plan as an INSERT: the second writer commits it right after the
+        // merger's read snapshot — the two-concurrent-merges interleaving.
+        dao.raceRow = WeighInRecord(
+            id = 0, weightGrams = 8025, recordedAt = 1_790_000_000L,
+            source = WeighInSource.STORED, recordNo = 41, scaleFlag = 0,
+            memberMid = 1, category = Category.MINE, garminStatus = GarminStatus.PENDING,
+            pushedAt = null, createdAt = now,
+        )
+        // Must not throw SQLiteConstraintException, must not double-insert.
+        val result = repo.merge(listOf(ns()))
+        assertEquals(0, result.inserted) // the conflicting insert was ignored, not counted
+        val forKey = dao.rows.value.filter { it.recordedAt == 1_790_000_000L && it.weightGrams == 8025 }
+        assertEquals(1, forKey.size)      // exactly one row survives the race
+        assertEquals(41L, forKey.single().recordNo)
+    }
+
+    @Test
     fun settingsDefaultsToMidOneAndNullCutoff() {
         val s = Settings.DEFAULT
         assertEquals("1", s.mid)
         assertNull(s.backfillCutoff)
     }
 }
+
+
