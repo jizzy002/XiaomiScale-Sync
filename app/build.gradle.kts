@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     // AGP 9 built-in Kotlin compiles Kotlin sources; no org.jetbrains.kotlin.android needed.
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
 }
 
 android {
@@ -34,6 +35,12 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     // Channels/suspend for the BleTransport seam (was only transitive via Compose)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+
+    // Local weigh-in archive (Task 8): Room + DataStore-backed settings.
+    implementation("androidx.room:room-runtime:2.8.5")
+    implementation("androidx.room:room-ktx:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
+    implementation("androidx.datastore:datastore-preferences:1.2.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
