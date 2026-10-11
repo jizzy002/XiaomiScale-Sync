@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Clock
 
@@ -30,8 +31,9 @@ import java.time.Clock
  *  - at most [EngineConfig.maxAttempts] connection attempts per sync;
  *  - a failed sync gates the next attempt with an exponential backoff
  *    (base [EngineConfig.backoffBaseMs]) instead of the interval;
- *  - a fruitless solicit-triggered sync mutes further solicit triggers
- *    for [EngineConfig.solicitQuietMs]; weigh-in triggers are never muted;
+ *  - a failed or fruitless solicit-triggered sync mutes further solicit
+ *    triggers for [EngineConfig.solicitQuietMs]; weigh-in triggers are
+ *    never muted;
  *  - the live listen is bounded by [EngineConfig.liveStartMs] (first
  *    event), [EngineConfig.liveIdleMs] (quiet between events) and
  *    [EngineConfig.liveMaxMs] (whole listen), and ends early on 5.4.
@@ -51,8 +53,9 @@ import java.time.Clock
  *    future) are replaced with the receive time; implausible weights
  *    (outside 100..30000) are discarded before they reach the merger;
  *  - exactly one LIVE archive record per session: committed from the 5.4
- *    event when it arrives, else from the last stable 5.3 at listen end,
- *    with `recordedAt` = commit time;
+ *    event when it arrives, else from the last stable 5.3 at listen end
+ *    (guest-ambiguous markers, flag 2 / mid 0 → NEEDS_REVIEW), with
+ *    `recordedAt` = commit time;
  *  - the engine never pushes to Garmin and never auto-deletes.
  */
 class SyncEngine(
@@ -67,7 +70,13 @@ class SyncEngine(
     val state: StateFlow<EngineState> = _state.asStateFlow()
 
     /** A trigger armed by [onBeacon] and not yet run by [syncNow]. */
-    private var pendingTrigger = false
+    private var pendingTrigger: TriggerKind? = null
+
+    /** One sync at a time: a concurrent [syncNow] gets null, never a second link. */
+    private val syncMutex = Mutex()
+
+    /** What armed the pending trigger — the failure handling differs. */
+    private enum class TriggerKind { SOLICIT, WEIGH_IN }
 
     /** The earliest the next sync may run (interval after success, backoff after failure). */
     private var nextSyncAllowedAtMs = Long.MIN_VALUE
@@ -105,7 +114,10 @@ class SyncEngine(
         var armed = false
         if ((archived || (weighIn == null && beacon.solicit)) && solicitMuteOk(weighIn)) {
             armed = true
-            pendingTrigger = true
+            // A weigh-in trigger outranks a pending solicit trigger: a real
+            // measurement is never downgraded to a silent sync.
+            val kind = if (archived) TriggerKind.WEIGH_IN else TriggerKind.SOLICIT
+            if (pendingTrigger != TriggerKind.WEIGH_IN) pendingTrigger = kind
         }
         return archived || armed
     }
@@ -113,48 +125,65 @@ class SyncEngine(
     /**
      * Runs the pending trigger when the discipline gates allow it, and
      * suspends for the whole sync. Returns the result, or null when nothing
-     * ran — no trigger is pending, or the connect gate (600 s interval after
-     * a success, backoff after a failure) has not expired yet; the trigger
-     * stays armed in that case, so it is never lost.
+     * ran — no trigger is pending, the connect gate (600 s interval after a
+     * success, backoff after a failure) has not expired yet, or another sync
+     * is already in flight; the trigger stays armed in those cases, so it is
+     * never lost.
      *
      * With [force] the gates are bypassed and a sync runs even without a
      * pending trigger (user-initiated "sync now" from Settings / the sync
-     * icon).
+     * icon). At most one sync runs at a time: even a forced [syncNow]
+     * landing mid-session returns null rather than opening a second link.
      */
     suspend fun syncNow(force: Boolean = false): SyncResult? {
-        if (!force && !pendingTrigger) return null
+        val kind = pendingTrigger
+        if (!force && kind == null) return null
         if (!force && !gateOpen()) return null
-        pendingTrigger = false
+        if (!syncMutex.tryLock()) return null // a sync is already running
+        try {
+            pendingTrigger = null
 
-        _state.update { it.copy(phase = EnginePhase.Connecting) }
-        val result = runSync()
-        val nowMs = clock.millis()
-        if (result.success) {
-            consecutiveFailures = 0
-            nextSyncAllowedAtMs = nowMs + config.minConnectIntervalMs
-            if (result.collected == 0) {
-                // Fruitless: nothing on the scale. Mute the solicit trigger
-                // that caused it so an idle app does not reconnect all night.
-                solicitMutedUntilMs = nowMs + config.solicitQuietMs
+            _state.update { it.copy(phase = EnginePhase.Connecting) }
+            val result = runSync()
+            val nowMs = clock.millis()
+            if (result.success) {
+                consecutiveFailures = 0
+                nextSyncAllowedAtMs = nowMs + config.minConnectIntervalMs
+                if (result.collected == 0) {
+                    // Fruitless: nothing on the scale. Mute the solicit trigger
+                    // that caused it so an idle app does not reconnect all night.
+                    solicitMutedUntilMs = nowMs + config.solicitQuietMs
+                }
+            } else {
+                consecutiveFailures++
+                nextSyncAllowedAtMs = nowMs + backoffMs()
+                when (kind) {
+                    // Spec §3: a failed solicited sync mutes solicitations for
+                    // 3 h — the trigger is dropped, not kept for retry.
+                    TriggerKind.SOLICIT -> solicitMutedUntilMs = nowMs + config.solicitQuietMs
+                    // A weigh-in trigger is kept: the real measurement retries
+                    // once the backoff allows.
+                    TriggerKind.WEIGH_IN -> pendingTrigger = kind
+                    // Forced sync: there is no trigger to keep.
+                    null -> Unit
+                }
             }
-        } else {
-            // The trigger is kept: the next allowed sync retries it.
-            pendingTrigger = true
-            consecutiveFailures++
-            nextSyncAllowedAtMs = nowMs + backoffMs()
+            _state.update {
+                it.copy(phase = EnginePhase.LastResult(result.code), lastResult = result)
+            }
+            return result
+        } finally {
+            syncMutex.unlock()
         }
-        _state.update {
-            it.copy(phase = EnginePhase.LastResult(result.code), lastResult = result)
-        }
-        return result
     }
 
     /**
      * Deletes [recordNos] from the *scale's* memory with action 6.2 — the
-     * only path that ever sends a delete. A clean run clears the whole
-     * queued-cleanup list ([WeighInRepository.takeScaleCleanup]); what the
-     * scale refuses is re-queued for the next session. Returns how many
-     * record numbers the scale actually deleted.
+     * only path that ever sends a delete. The queued-cleanup list is owned
+     * by the caller (the drain path in [collect] already took it): this call
+     * never drains or discards items it was not handed, and what the scale
+     * refuses is re-queued for the next session. Returns how many record
+     * numbers the scale actually deleted.
      */
     suspend fun cleanScaleMemory(recordNos: List<Long>): Int {
         if (recordNos.isEmpty()) return 0
@@ -276,8 +305,11 @@ class SyncEngine(
                             recordedAt = clock.instant().epochSecond,
                             source = WeighInSource.LIVE,
                             recordNo = null,
-                            scaleFlag = 0,
-                            memberMid = profileMid(),
+                            // No 5.4 arrived: who stood on the scale is
+                            // ambiguous, so the record carries guest markers
+                            // (flag 2, mid 0) → NEEDS_REVIEW, never auto-pushed.
+                            scaleFlag = AMBIGUOUS_FLAG,
+                            memberMid = AMBIGUOUS_MID,
                         )
                     }
                 }
@@ -353,7 +385,6 @@ class SyncEngine(
             }
         }
         if (failed.isNotEmpty()) repo.queueScaleCleanup(failed)
-        if (failed.isEmpty()) repo.takeScaleCleanup() // clean run: the queue is empty
         return removed
     }
 
@@ -365,7 +396,8 @@ class SyncEngine(
             it.copy(
                 scaleSeen = true,
                 lastHeardAt = clock.millis(),
-                phase = EnginePhase.Listening,
+                // A running sync owns the phase; hearing never stomps it.
+                phase = if (syncMutex.isLocked) it.phase else EnginePhase.Listening,
             )
         }
     }
@@ -398,9 +430,9 @@ class SyncEngine(
     }
 
     /**
-     * A solicit trigger stays muted after a fruitless solicit sync (the idle
-     * app stops waking for a scale with nothing to give); weigh-in triggers
-     * are never muted — a real measurement always syncs.
+     * A solicit trigger stays muted after a failed or fruitless solicit sync
+     * (the idle app stops waking for a scale with nothing to give); weigh-in
+     * triggers are never muted — a real measurement always syncs.
      */
     private fun solicitMuteOk(weighIn: BroadcastWeighIn?): Boolean {
         if (weighIn != null) return true
@@ -416,8 +448,6 @@ class SyncEngine(
         val shift = (consecutiveFailures - 1).coerceIn(0, 16)
         return (config.backoffBaseMs shl shift).coerceAtMost(config.backoffMaxMs)
     }
-
-    private fun profileMid(): Long = profile.mid.toLongOrNull() ?: 1L
 
     private fun profileJson(): String = ProfileJson.build(
         mid = profile.mid,
@@ -449,6 +479,14 @@ class SyncEngine(
 
         /** Record numbers per 6.2 call. */
         const val CLEANUP_BATCH = 20
+
+        /**
+         * Attribution markers for a 5.3-only LIVE commit (no 5.4 arrived):
+         * flag 2 + mid 0 classify as NEEDS_REVIEW per the merger's rule —
+         * a guest standing on the scale is never pushed as the owner.
+         */
+        const val AMBIGUOUS_FLAG = 2
+        const val AMBIGUOUS_MID = 0L
 
         /** Broadcast event keys remembered for dedupe. */
         const val EVENT_KEY_MEMORY = 256

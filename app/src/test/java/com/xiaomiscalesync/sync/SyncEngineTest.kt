@@ -18,6 +18,7 @@ import com.xiaomiscalesync.fixtures.loopback
 import com.xiaomiscalesync.proto.Profile
 import com.xiaomiscalesync.proto.ProfileJson
 import com.xiaomiscalesync.proto.ScaleSession
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -522,5 +523,87 @@ class SyncEngineTest {
         h.engine.onBeacon(weighInBeacon(19), BroadcastWeighIn(1, 8025, 1_789_999_020))
         assertTrue(h.engine.syncNow()!!.success)
         assertEquals(2, h.rig.connectCount)
+    }
+
+    // ---------- review fix (q): a FAILED solicit sync also mutes for 3 h ----------
+
+    @Test(timeout = 60_000)
+    fun failedSolicitSyncMutesSolicitsForThreeHours() = runBlocking<Unit> {
+        // The scale solicits but stays silent mid-login: the sync fails.
+        val h = Harness(configure = { it.silentAfterRandKey = true })
+
+        assertTrue(h.engine.onBeacon(solicitBeacon(20), null))
+        val first = h.engine.syncNow()
+        assertFalse(first!!.success)
+        assertEquals(2, first.attempts)
+        assertEquals(2, h.rig.connectCount)
+
+        // Past the backoff but inside the 3 h mute: fresh solicits connect nothing.
+        h.clock.advance(61_000)
+        assertFalse(h.engine.onBeacon(solicitBeacon(21), null))
+        assertNull(h.engine.syncNow())
+        assertEquals(2, h.rig.connectCount)
+
+        // Past the mute, solicits trigger again.
+        h.clock.advance(3 * 3_600_000L)
+        assertTrue(h.engine.onBeacon(solicitBeacon(22), null))
+        val second = h.engine.syncNow()
+        assertFalse(second!!.success)
+        assertEquals(4, h.rig.connectCount)
+    }
+
+    // ---------- review fix (r): explicit cleanup never discards unrelated queue items ----------
+
+    @Test(timeout = 20_000)
+    fun cleanScaleMemoryLeavesUnrelatedQueuedItemsAlone() = runBlocking<Unit> {
+        val h = Harness()
+        h.repo.queueScaleCleanup(listOf(9)) // re-queued by an earlier failed drain
+
+        val deleted = h.engine.cleanScaleMemory(listOf(41))
+
+        assertEquals(1, deleted)
+        assertEquals(listOf(41L), h.rig.deletedRecordNos)
+        assertEquals(listOf(9L), h.repo.takeScaleCleanup()) // still queued for the next sync
+    }
+
+    // ---------- review fix (s): 5.3-only commit is ambiguous → needs review ----------
+
+    @Test(timeout = 20_000)
+    fun stableLive53Without54CommitsNeedsReviewRecord() = runBlocking<Unit> {
+        val h = Harness(configure = { fake ->
+            fake.recordsString = ""
+            fake.liveScriptOnFetch += {
+                fake.emitLive(7100, stable = false)
+                fake.emitLive(7150, stable = true)
+                fake.emitLive(7160, stable = true)
+                // No 5.4: the user steps off before the scale finishes.
+            }
+        })
+
+        h.engine.onBeacon(solicitBeacon(23), null)
+        assertTrue(h.engine.syncNow()!!.success)
+
+        val row = h.rows.single()
+        assertEquals(WeighInSource.LIVE, row.source)
+        assertEquals(7160, row.weightGrams) // the last stable weight
+        assertEquals(Category.NEEDS_REVIEW, row.category) // attribution is ambiguous
+        assertEquals(now0, row.recordedAt) // commit time
+        assertNull(row.recordNo)
+    }
+
+    // ---------- review fix (t): no second connection while a sync is in flight ----------
+
+    @Test(timeout = 20_000)
+    fun concurrentSyncNowCallsOpenExactlyOneConnection() = runBlocking<Unit> {
+        val h = Harness()
+        assertTrue(h.engine.onBeacon(solicitBeacon(24), null))
+
+        val scanner = async { h.engine.syncNow() }
+        val uiButton = async { h.engine.syncNow(force = true) } // lands mid-session
+        val results = listOf(scanner.await(), uiButton.await())
+
+        assertEquals(1, results.count { it != null }) // the loser gets null
+        assertEquals(1, h.rig.connectCount) // exactly one connect attempt
+        assertTrue(results.filterNotNull().single().success)
     }
 }
