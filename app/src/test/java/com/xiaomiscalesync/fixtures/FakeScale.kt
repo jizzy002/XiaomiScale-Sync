@@ -64,7 +64,7 @@ class FakeScale(
      * mid-handshake while every ack still flowed. The session's value
      * waits must surface this as a [ProtocolError], not hang.
      */
-    val silentAfterRandKey: Boolean = false,
+    var silentAfterRandKey: Boolean = false,
 ) {
 
     /** Scale-side end of the loopback; bound by [accept]. */
@@ -135,8 +135,25 @@ class FakeScale(
      */
     var liveOnStoredFetch: Pair<Int, Boolean>? = null
 
+    /**
+     * Scripted live events injected toward the app the moment action 6.1
+     * arrives — strictly before its result goes on the wire, in order
+     * (after [liveOnStoredFetch]). SyncEngine's live path is driven with
+     * this in tests: a run of 5.3 events followed by the finished 5.4,
+     * all buffered in the app's live queue before the engine starts
+     * listening, so the sequence is deterministic.
+     */
+    val liveScriptOnFetch: MutableList<suspend () -> Unit> = CopyOnWriteArrayList()
+
     /** When non-zero, every action result carries this status instead of 0. */
     var failActionStatus: Int = 0
+
+    /**
+     * When non-zero, only action 6.2 (delete) fails with this status —
+     * 7.1 and 6.1 keep answering normally. Lets a test drive the engine's
+     * cleanup-failure path without breaking the rest of the session.
+     */
+    var failDeleteStatus: Int = 0
 
     /**
      * When non-zero, the scale refuses OP_HELLO: it answers with an
@@ -388,6 +405,8 @@ class FakeScale(
                 // the live event is genuinely in flight while the app still
                 // awaits the 6.1 result (the interleaving test relies on it).
                 liveOnStoredFetch?.let { emitLive(it.first, it.second) }
+                // Same wire position for the scripted run: events first, result after.
+                for (script in liveScriptOnFetch) script()
                 sendResult(t, msg.tid, failActionStatus, listOf(MiotCodec.param(3, ParamType.U16, storedCount)))
                 if (failActionStatus == 0 && storedCount > 0) {
                     replySession(
@@ -403,14 +422,17 @@ class FakeScale(
                 val numbers = msg.params[2] as? String
                     ?: throw ProtocolError("scale expected a string param 2 for 6.2, got ${msg.params[2]}")
                 if (numbers.isEmpty()) throw ProtocolError("scale got an empty 6.2 record list")
-                for (part in numbers.split(",")) {
+                val nos = numbers.split(",").map { part ->
                     val no = part.trim().toLongOrNull()
                     if (no == null || no < 0) {
                         throw ProtocolError("scale got a malformed 6.2 record number: '$part'")
                     }
-                    deletedRecordNos += no
+                    no
                 }
-                sendResult(t, msg.tid, failActionStatus, emptyList())
+                // A rejected delete records nothing — the numbers stay stored.
+                val status = if (failDeleteStatus != 0) failDeleteStatus else failActionStatus
+                if (status == 0) deletedRecordNos.addAll(nos)
+                sendResult(t, msg.tid, status, emptyList())
             }
 
             else -> throw ProtocolError("scale got an unknown action ${msg.siid}.${msg.iid}")
@@ -442,6 +464,22 @@ class FakeScale(
                 MiotCodec.param(2, ParamType.U8, if (stable) 1 else 0),
                 MiotCodec.param(3, ParamType.U16, weightGrams),
             ),
+        )
+        replySession(transport, nextEventTid(), MiotCodec.OP_EVENT, body)
+    }
+
+    /**
+     * Injects a live 5.4 event — the finished ("stable") weigh-in. Its
+     * payload is param 4, the string `mid,user_type,weight,flag,ts`,
+     * exactly the reference protocol's shape. SyncEngine commits at most
+     * one LIVE archive record per session from this event.
+     */
+    suspend fun emitFinished(mid: Long, userType: Int, weightGrams: Int, flag: Int, ts: Long) {
+        check(::transport.isInitialized) { "call accept() first" }
+        val body = MiotCodec.event(
+            5,
+            4,
+            listOf(MiotCodec.param(4, ParamType.STRING, "$mid,$userType,$weightGrams,$flag,$ts")),
         )
         replySession(transport, nextEventTid(), MiotCodec.OP_EVENT, body)
     }
