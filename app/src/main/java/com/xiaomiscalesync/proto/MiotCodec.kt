@@ -145,7 +145,12 @@ object MiotCodec {
             params[piid] = when (type) {
                 ParamType.STRING.code -> String(buf, pos, len, Charsets.UTF_8)
                 ParamType.U8.code, ParamType.U16.code -> uN(buf, pos, len)
-                ParamType.U64.code -> le64(buf, pos)
+                ParamType.U64.code -> {
+                    // le64 reads a fixed 8 bytes; a corrupted frame declaring
+                    // a smaller wire length would otherwise run past the body.
+                    require(len == 8) { "U64 parameter $piid has wire length $len, expected 8" }
+                    le64(buf, pos)
+                }
                 else -> when (len) { // unknown type: fall back to length-based decoding
                     1, 2, 4 -> uN(buf, pos, len)
                     8 -> le64(buf, pos)

@@ -2,6 +2,7 @@ package com.xiaomiscalesync.proto
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /**
@@ -80,6 +81,17 @@ class MiotCodecTest {
             MiotMessage(tid = 0x0009, op = MiotCodec.OP_RESULT, status = 0, params = mapOf(3 to 12)),
             msg,
         )
+    }
+
+    @Test
+    fun rejectsU64ParamWithUndersizedWireLength() {
+        // Malformed event: n=1, piid 3, type_len 0x8000 (U64, wire len 0).
+        // The generic bound check passes (0 bytes needed), but a fixed
+        // 8-byte U64 read would run past the body -> must be a clean
+        // IllegalArgumentException, not ArrayIndexOutOfBoundsException.
+        assertThrows(IllegalArgumentException::class.java) {
+            MiotCodec.decode(hex("0d20 0900 07 05 03 00 01 03 00 00 80"))
+        }
     }
 
     @Test
