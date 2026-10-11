@@ -138,6 +138,12 @@ class FakeScale(
     /** When non-zero, every action result carries this status instead of 0. */
     var failActionStatus: Int = 0
 
+    /**
+     * When non-zero, the scale refuses OP_HELLO: it answers with an
+     * OP_RESULT of this status on the hello's tid instead of the echo.
+     */
+    var helloFailStatus: Int = 0
+
     /** When true, action results are dropped — the app's wait must time out. */
     var dropActionResults: Boolean = false
 
@@ -350,7 +356,14 @@ class FakeScale(
         appCounters += u16(data, 0)
         val msg = MiotCodec.decode(ScaleSession.decryptValue(k.appKey, k.appIv, data))
         when (msg.op) {
-            MiotCodec.OP_HELLO -> replySession(t, msg.tid, MiotCodec.OP_HELLO, ByteArray(0))
+            MiotCodec.OP_HELLO -> if (helloFailStatus != 0) {
+                // Refused: an OP_RESULT with the failure status on the
+                // hello's own tid (a plain OP_HELLO echo has status 0).
+                sendResult(t, msg.tid, helloFailStatus, emptyList())
+            } else {
+                replySession(t, msg.tid, MiotCodec.OP_HELLO, ByteArray(0))
+            }
+
             MiotCodec.OP_ACTION -> handleAction(t, msg)
             else -> throw ProtocolError("scale got an unexpected session op 0x${msg.op.toString(16)}")
         }

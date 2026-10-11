@@ -80,6 +80,20 @@ class ScaleSessionChannelTest {
         assertTrue("fake errors: ${fake.errors}", fake.errors.isEmpty())
     }
 
+    // ---------- counter discipline: 0-based, +1 per sent message ----------
+
+    @Test(timeout = 20_000)
+    fun outboundCounterStartsAtZeroAndIncreasesPerSentMessage() = withSession { session, fake, _ ->
+        // Two messages in one session: the fake sees the frame counter of
+        // each — 0 for the first, 1 for the second. (A single-message test
+        // cannot pin the increment; the appCtr += 1 deletion is caught here.)
+        assertEquals(MiotCodec.OP_HELLO, session.hello().op)
+        session.action(7, 1, MiotCodec.param(1, ParamType.STRING, "{}"))
+
+        assertEquals(listOf(0, 1), fake.appCounters.toList())
+        assertTrue("fake errors: ${fake.errors}", fake.errors.isEmpty())
+    }
+
     // ---------- (b) action 7.1 returns the pinned result params ----------
 
     @Test(timeout = 20_000)
@@ -232,6 +246,15 @@ class ScaleSessionChannelTest {
         val err = assertThrows(ProtocolError::class.java) { runBlocking { session.action(7, 1) } }
 
         assertTrue("message: ${err.message}", err.message.orEmpty().contains("status 5"))
+    }
+
+    @Test(timeout = 20_000)
+    fun helloNonZeroStatusSurfacesProtocolError() = withSession { session, fake, _ ->
+        fake.helloFailStatus = 3
+
+        val err = assertThrows(ProtocolError::class.java) { runBlocking { session.hello() } }
+
+        assertTrue("message: ${err.message}", err.message.orEmpty().contains("status 3"))
     }
 
     // ---------- close terminates the pump cleanly ----------

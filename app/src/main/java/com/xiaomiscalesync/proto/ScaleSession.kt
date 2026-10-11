@@ -231,12 +231,16 @@ class ScaleSession(
         pumpJob = scope.launch { pump() }
     }
 
-    /** Sends OP_HELLO and awaits the scale's echo (same tid). */
+    /** Sends OP_HELLO and awaits the scale's echo (same tid): non-zero status → [ProtocolError]. */
     suspend fun hello(): MiotMessage {
         val (tid, future) = register()
         try {
             sendRequest(MiotCodec.encode(tid, MiotCodec.OP_HELLO, ByteArray(0)))
-            return awaitFuture(tid, future)
+            val reply = awaitFuture(tid, future)
+            if (reply.status != 0) {
+                throw ProtocolError("hello failed: status ${reply.status}")
+            }
+            return reply
         } finally {
             pending.remove(tid)
         }
