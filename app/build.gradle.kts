@@ -35,4 +35,5 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
+    testImplementation("com.google.code.gson:gson:2.11.0") // read committed crypto test vectors
 }
