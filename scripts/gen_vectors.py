@@ -23,6 +23,18 @@ With --beacon (beacon_vectors.json), fixtures:
   beacon_solicit    MiBeacon v5 unencrypted "connect to me" frame
                     (fc 0x5b10, MAC field, no object)
 
+With --micloud (micloud_vectors.json; needs `pip install pycryptodome`),
+fixtures:
+  rc4_*             raw RC4 known answers (published Wikipedia/RFC vectors)
+  rc4_drop1024      RC4 with the first 1024 keystream bytes dropped — the
+                    exact transform token_extractor.py applies to the
+                    signed nonce (r.encrypt(bytes(1024)) before use)
+  mi_sign           the full Mi Cloud request-signing chain ported from
+                    Xiaomi-cloud-tokens-extractor's token_extractor.py:
+                    signed_nonce (base64 SHA-256), generate_enc_params
+                    (rc4_hash__ + encrypted values + signature/ssecurity/
+                    _nonce), and an encrypted response body
+
 All inputs are fixed dummy (non-secret) bytes so regeneration is
 reproducible; the ccm_no_aad nonce is a random value pinned here for the
 same reason.
@@ -30,6 +42,7 @@ same reason.
 Usage:
     python scripts/gen_vectors.py > app/src/test/resources/crypto_vectors.json
     python scripts/gen_vectors.py --beacon > app/src/test/resources/beacon_vectors.json
+    python scripts/gen_vectors.py --micloud > app/src/test/resources/micloud_vectors.json
 """
 
 import json
@@ -301,5 +314,138 @@ beacon_fixture(
     plaintext=b"",
 )
 
-json.dump(beacon_fixtures if "--beacon" in sys.argv else fixtures, sys.stdout, indent=2)
+# --- micloud fixtures: RC4 and the Mi Cloud request-signing chain -----------
+# The signing helpers below are a direct port of the reference client
+# Xiaomi-cloud-tokens-extractor's token_extractor.py (signed_nonce,
+# generate_enc_signature, encrypt_rc4/decrypt_rc4 with the 1024-byte RC4
+# drop, generate_enc_params). Requires pycryptodome for ARC4.
+
+micloud_fixtures = []
+
+if "--micloud" in sys.argv:
+    import base64
+    import hashlib
+
+    from Crypto.Cipher import ARC4
+
+    def rc4_apply(key: bytes, payload: bytes) -> bytes:
+        return ARC4.new(key).encrypt(payload)
+
+    def rc4_apply_drop(key: bytes, payload: bytes, drop: int = 1024) -> bytes:
+        r = ARC4.new(key)
+        r.encrypt(bytes(drop))  # reference: r.encrypt(bytes(1024))
+        return r.encrypt(payload)
+
+    def signed_nonce(ssecurity: str, nonce: str) -> str:
+        digest = hashlib.sha256(base64.b64decode(ssecurity) + base64.b64decode(nonce))
+        return base64.b64encode(digest.digest()).decode("utf-8")
+
+    def generate_enc_signature(url, method, snonce, params):
+        signature_params = [str(method).upper(), url.split("com")[1].replace("/app/", "/")]
+        for k, v in params.items():
+            signature_params.append(f"{k}={v}")
+        signature_params.append(snonce)
+        sha1 = hashlib.sha1("&".join(signature_params).encode("utf-8")).digest()
+        return base64.b64encode(sha1).decode()
+
+    def encrypt_rc4(password: str, payload: str) -> str:
+        return base64.b64encode(
+            rc4_apply_drop(base64.b64decode(password), payload.encode())
+        ).decode()
+
+    def decrypt_rc4(password: str, payload: str) -> bytes:
+        return rc4_apply_drop(base64.b64decode(password), base64.b64decode(payload))
+
+    def generate_enc_params(url, method, snonce, nonce, params, ssecurity):
+        params = dict(params)  # the reference mutates its input; copy here
+        params["rc4_hash__"] = generate_enc_signature(url, method, snonce, params)
+        for k, v in params.items():
+            params[k] = encrypt_rc4(snonce, v)
+        params["signature"] = generate_enc_signature(url, method, snonce, params)
+        params["ssecurity"] = ssecurity
+        params["_nonce"] = nonce
+        return params
+
+    # rc4: published known answers (Wikipedia "RC4" article test vectors),
+    # recomputed here so a broken RC4 implementation cannot pass unnoticed.
+    for name, key_s, plain_s, published in [
+        ("rc4_key_plaintext", "Key", "Plaintext", "bbf316e8d940af0ad3"),
+        ("rc4_secret_attack", "Secret", "Attack at dawn", "45a01f645fc35b383552544b9bf5"),
+    ]:
+        key, plaintext = key_s.encode(), plain_s.encode()
+        ciphertext = rc4_apply(key, plaintext)
+        assert ciphertext.hex() == published, (name, ciphertext.hex())
+        micloud_fixtures.append(
+            {
+                "name": name,
+                "type": "rc4",
+                "key": hx(key),
+                "plaintext": hx(plaintext),
+                "ciphertext": hx(ciphertext),
+            }
+        )
+
+    # rc4_drop1024: the drop-1024 transform encrypt_rc4/decrypt_rc4 use.
+    drop_key = bytes(range(32))
+    drop_plain = b"mi cloud rc4 drop-1024 known answer"
+    micloud_fixtures.append(
+        {
+            "name": "rc4_drop1024",
+            "type": "rc4_drop1024",
+            "key": hx(drop_key),
+            "plaintext": hx(drop_plain),
+            "ciphertext": hx(rc4_apply_drop(drop_key, drop_plain)),
+        }
+    )
+
+    # mi_sign: the full generate_enc_params chain plus a response body
+    # encrypted the way the server encrypts one (decrypt_rc4 input).
+    def mi_sign_fixture(name, region, path, params, millis, nonce_random):
+        ssecurity = base64.b64encode(
+            bytes.fromhex("00112233445566778899aabbccddeeff")
+        ).decode()
+        minute = int(millis / 60000)  # reference: int(millis / 60000)
+        nonce = base64.b64encode(nonce_random + minute.to_bytes(4, "big")).decode()
+        snonce = signed_nonce(ssecurity, nonce)
+        url = "https://" + ("" if region == "cn" else region + ".") + \
+            "api.io.mi.com/app" + path
+        enc = generate_enc_params(url, "POST", snonce, nonce, dict(params), ssecurity)
+        assert list(enc.keys()) == list(params.keys()) + \
+            ["rc4_hash__", "signature", "ssecurity", "_nonce"]
+        response_plaintext = '{"code":0,"message":"ok","result":{"homelist":[]}}'
+        response_ciphertext = encrypt_rc4(snonce, response_plaintext)
+        assert decrypt_rc4(snonce, response_ciphertext).decode() == response_plaintext
+        micloud_fixtures.append(
+            {
+                "name": name,
+                "type": "mi_sign",
+                "ssecurity": ssecurity,
+                "nonceRandom": hx(nonce_random),
+                "nonce": nonce,
+                "millis": millis,
+                "url": url,
+                "method": "POST",
+                "signedNonce": snonce,
+                "params": dict(params),
+                "encParams": enc,
+                "responsePlaintext": response_plaintext,
+                "responseCiphertext": response_ciphertext,
+            }
+        )
+
+    homes_data = '{"fg": true, "fetch_share": true, "fetch_share_dev": true, "limit": 300, "app_ver": 7}'
+    mi_sign_fixture(
+        "mi_sign", "de", "/v2/homeroom/gethome", {"data": homes_data},
+        millis=1760000000000, nonce_random=bytes.fromhex("1122334455667788"),
+    )
+    devlist_data = '{"home_owner": 424242,"home_id": 700000001,  "limit": 200,  "get_split_device": true, "support_smart_home": true}'
+    mi_sign_fixture(
+        "mi_sign_cn", "cn", "/v2/home/home_device_list", {"data": devlist_data},
+        millis=1750000000123, nonce_random=bytes.fromhex("aabbccddeeff0011"),
+    )
+
+if "--micloud" in sys.argv:
+    json.dump(micloud_fixtures, sys.stdout, indent=2)
+else:
+    json.dump(beacon_fixtures if "--beacon" in sys.argv else fixtures, sys.stdout, indent=2)
 sys.stdout.write("\n")

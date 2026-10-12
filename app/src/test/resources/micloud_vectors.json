@@ -1,0 +1,69 @@
+[
+  {
+    "name": "rc4_key_plaintext",
+    "type": "rc4",
+    "key": "4b6579",
+    "plaintext": "506c61696e74657874",
+    "ciphertext": "bbf316e8d940af0ad3"
+  },
+  {
+    "name": "rc4_secret_attack",
+    "type": "rc4",
+    "key": "536563726574",
+    "plaintext": "41747461636b206174206461776e",
+    "ciphertext": "45a01f645fc35b383552544b9bf5"
+  },
+  {
+    "name": "rc4_drop1024",
+    "type": "rc4_drop1024",
+    "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "plaintext": "6d6920636c6f7564207263342064726f702d31303234206b6e6f776e20616e73776572",
+    "ciphertext": "db01708f5c9c899f7fd3984a4a30111df1e499130f820dd9fae962fb6ee7507273fc55"
+  },
+  {
+    "name": "mi_sign",
+    "type": "mi_sign",
+    "ssecurity": "ABEiM0RVZneImaq7zN3u/w==",
+    "nonceRandom": "1122334455667788",
+    "nonce": "ESIzRFVmd4gBv5dV",
+    "millis": 1760000000000,
+    "url": "https://de.api.io.mi.com/app/v2/homeroom/gethome",
+    "method": "POST",
+    "signedNonce": "1KQS0QtX6elGRcx/c7P+h8NBs9g2WcdowXCQh/vI678=",
+    "params": {
+      "data": "{\"fg\": true, \"fetch_share\": true, \"fetch_share_dev\": true, \"limit\": 300, \"app_ver\": 7}"
+    },
+    "encParams": {
+      "data": "pzrfrKd2qYOPVhPMsv7D/sFovq9hxVUXS3ilPtzHd5WiuEN74AYbrC9Mzix9Hb4LJHucYM2NkfmAW/DzUcsNiMgQHtFhJAUMsJjlNYifO2koaYi8z3g=",
+      "rc4_hash__": "llPxgOIN56K/E0WXyOzH3Yc6sJYn3mwVHQjSIw==",
+      "signature": "nJI5++tJrtwpIbcrFnBWMq+0nx0=",
+      "ssecurity": "ABEiM0RVZneImaq7zN3u/w==",
+      "_nonce": "ESIzRFVmd4gBv5dV"
+    },
+    "responsePlaintext": "{\"code\":0,\"message\":\"ok\",\"result\":{\"homelist\":[]}}",
+    "responseCiphertext": "pzrapOEpq83ND1SN96/W+tJu9Mowwl9HAnjte9vAboSsoho/7R0VoRxW1TktQroyPHA="
+  },
+  {
+    "name": "mi_sign_cn",
+    "type": "mi_sign",
+    "ssecurity": "ABEiM0RVZneImaq7zN3u/w==",
+    "nonceRandom": "aabbccddeeff0011",
+    "nonce": "qrvM3e7/ABEBvQxK",
+    "millis": 1750000000123,
+    "url": "https://api.io.mi.com/app/v2/home/home_device_list",
+    "method": "POST",
+    "signedNonce": "fYv7AQyC4noYu6sljJmnN1UpsYttEOuAKjGfk2b+JiY=",
+    "params": {
+      "data": "{\"home_owner\": 424242,\"home_id\": 700000001,  \"limit\": 200,  \"get_split_device\": true, \"support_smart_home\": true}"
+    },
+    "encParams": {
+      "data": "GnBM69G+qBoZ5q8i3GdC/sKiQ7ThnTcwTmNRS5j2uY4aiFb1l5sJfUEU02+osFngGdKgyqe3asxCzpwFykd3WMw13M8BJ6Sx6KNGMBLI6At4ro6Szm+spooX+iWoMwSo8WihZ+vFjnn/vvM88juQBG4=",
+      "rc4_hash__": "DyUQ9dWSsBI/8volzS4OooTYHumEmnkgE3t9KQ==",
+      "signature": "qeXnyWzhRT5swow8Fonb31KE45w=",
+      "ssecurity": "ABEiM0RVZneImaq7zN3u/w==",
+      "_nonce": "qrvM3e7/ABEBvQxK"
+    },
+    "responsePlaintext": "{\"code\":0,\"message\":\"ok\",\"result\":{\"homelist\":[]}}",
+    "responseCiphertext": "GnBH69i+1U9epOg9my4Rq5fzU7rx3n56DSxGcYLn98AYhR3nz8RUKB1MjDuqqG7UCcY="
+  }
+]

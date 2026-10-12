@@ -42,7 +42,10 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.5")
     implementation("androidx.datastore:datastore-preferences:1.2.1")
 
+    // Xiaomi cloud client (Task 10): HTTP + JSON. MockWebServer below is test-only.
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
+    implementation("com.google.code.gson:gson:2.11.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
-    testImplementation("com.google.code.gson:gson:2.11.0") // read committed crypto test vectors
 }
