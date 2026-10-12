@@ -48,3 +48,19 @@ object ProfileJson {
     ): String =
         """{"mid":"$mid","duid":1,"uc":1,"ow":1,"unit":1,"time":$nowUnix,"ud":[{"duid":1,"ut":1,"age":$age,"sex":$sex,"hi":$heightCm,"wt":$weightGrams}]}"""
 }
+
+/**
+ * The profile the engine pushes, from persisted [Settings] plus the latest
+ * archived weight. Unanswered fields (a pre-Task-14 install) keep the
+ * [Profile] defaults; [weightGrams] null → the 8000 fallback.
+ */
+fun Settings.toProfile(weightGrams: Int?): Profile {
+    val defaults = Profile()
+    return Profile(
+        mid = mid,
+        age = age ?: defaults.age,
+        sex = sex,
+        heightCm = heightCm ?: defaults.heightCm,
+        weightGrams = weightGrams ?: defaults.weightGrams,
+    )
+}

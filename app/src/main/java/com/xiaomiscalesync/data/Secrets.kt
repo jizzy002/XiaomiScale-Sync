@@ -59,6 +59,10 @@ object KeyFormat {
  * Write seam for the scale's secrets — [Secrets] on the device,
  * a fake in the onboarding tests. Lives in `data` (not in the UI package)
  * so nothing above the storage layer decides how keys are persisted.
+ *
+ * The `has*` probes are **presence booleans only**: the wizard seeds its
+ * green-check flags from them on re-entry (rotation/process death) and
+ * key bytes never travel up to the VM or any screen.
  */
 interface KeyVault {
     /** Persists the scale's MAC in canonical `AA:BB:…` form. */
@@ -69,6 +73,15 @@ interface KeyVault {
 
     /** Persists the BLE KEY (32 hex chars). */
     fun saveBleKey(bleKeyHex: String)
+
+    /** True when a readable MAC record exists (decrypted successfully). */
+    fun hasMac(): Boolean
+
+    /** True when a readable TOKEN record exists. */
+    fun hasToken(): Boolean
+
+    /** True when a readable BLE KEY record exists. */
+    fun hasBleKey(): Boolean
 }
 
 /**
@@ -120,6 +133,17 @@ class Secrets(context: Context) : KeyVault, TokenStore {
 
     /** BLE KEY (32 hex chars), or null before extraction. */
     fun bleKey(): String? = get(KEY_BLE_KEY)
+
+    /**
+     * Presence probes for the wizard's re-entry seeding — booleans only,
+     * backed by a successful decrypt (a foreign/rotated Keystore record
+     * reads as absent, exactly like the value getters).
+     */
+    override fun hasMac(): Boolean = get(KEY_MAC) != null
+
+    override fun hasToken(): Boolean = get(KEY_TOKEN) != null
+
+    override fun hasBleKey(): Boolean = get(KEY_BLE_KEY) != null
 
     // ------------------------------------------------------------ TokenStore
 

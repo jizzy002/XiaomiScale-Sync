@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -20,6 +21,11 @@ data class Settings(
     val onboarded: Boolean,
     val backfillCutoff: Long?,
     val mid: String,
+    /** Onboarding/Settings profile answers; null until the wizard finishes. */
+    val heightCm: Int? = null,
+    val age: Int? = null,
+    /** Scale convention: 1 = male, 2 = female. */
+    val sex: Int = 1,
 ) {
     companion object {
         const val DEFAULT_MID = "1"
@@ -33,8 +39,8 @@ fun interface SettingsSource {
 }
 
 /**
- * Write seam for the three onboarding decisions (plan Task 14): `mid` and
- * `backfillCutoff` are written once at wizard completion, `onboarded` flips
+ * Write seam for the onboarding decisions (plan Task 14): `mid`,
+ * `backfillCutoff` and the profile are written once at wizard completion, `onboarded` flips
  * true exactly then and only then. Lets `OnboardingViewModel`-level tests
  * run on the JVM without DataStore.
  */
@@ -45,6 +51,9 @@ interface SettingsWriter {
     suspend fun setBackfillCutoff(v: Long?)
 
     suspend fun setMid(v: String)
+
+    /** The scale profile answers (action 7.1 metadata), written at Finish. */
+    suspend fun setProfile(heightCm: Int, age: Int, sex: Int)
 }
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -71,16 +80,30 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         dataStore.edit { it[KEY_MID] = v }
     }
 
+    override suspend fun setProfile(heightCm: Int, age: Int, sex: Int) {
+        dataStore.edit {
+            it[KEY_HEIGHT] = heightCm
+            it[KEY_AGE] = age
+            it[KEY_SEX] = sex
+        }
+    }
+
     private fun Preferences.toSettings(): Settings = Settings(
         onboarded = this[KEY_ONBOARDED] ?: false,
         backfillCutoff = this[KEY_CUTOFF],
         mid = this[KEY_MID] ?: Settings.DEFAULT_MID,
+        heightCm = this[KEY_HEIGHT],
+        age = this[KEY_AGE],
+        sex = this[KEY_SEX] ?: 1,
     )
 
     companion object {
         private val KEY_ONBOARDED = booleanPreferencesKey("onboarded")
         private val KEY_CUTOFF = longPreferencesKey("backfill_cutoff")
         private val KEY_MID = stringPreferencesKey("mid")
+        private val KEY_HEIGHT = intPreferencesKey("height_cm")
+        private val KEY_AGE = intPreferencesKey("age")
+        private val KEY_SEX = intPreferencesKey("sex")
 
         fun of(context: Context): SettingsStore = SettingsStore(context.settingsDataStore)
     }

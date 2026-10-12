@@ -33,6 +33,7 @@ class OnboardingViewModelTest {
 
         override suspend fun setOnboarded(v: Boolean) {
             onboardedCalls += v
+            order += "onboarded"
         }
 
         override suspend fun setBackfillCutoff(v: Long?) {
@@ -42,12 +43,26 @@ class OnboardingViewModelTest {
         override suspend fun setMid(v: String) {
             midCalls += v
         }
+
+        val profileCalls = mutableListOf<Triple<Int, Int, Int>>()
+
+        /** Every writer call in order, so "profile before onboarded" is assertable. */
+        val order = mutableListOf<String>()
+
+        override suspend fun setProfile(heightCm: Int, age: Int, sex: Int) {
+            profileCalls += Triple(heightCm, age, sex)
+            order += "profile"
+        }
     }
 
-    private class FakeVault : KeyVault {
-        var mac: String? = null
-        var token: String? = null
-        var bleKey: String? = null
+    private class FakeVault(
+        presetMac: String? = null,
+        presetToken: String? = null,
+        presetBleKey: String? = null,
+    ) : KeyVault {
+        var mac: String? = presetMac
+        var token: String? = presetToken
+        var bleKey: String? = presetBleKey
 
         override fun saveMac(mac: String) {
             this.mac = mac
@@ -60,6 +75,12 @@ class OnboardingViewModelTest {
         override fun saveBleKey(bleKeyHex: String) {
             this.bleKey = bleKeyHex
         }
+
+        override fun hasMac(): Boolean = mac != null
+
+        override fun hasToken(): Boolean = token != null
+
+        override fun hasBleKey(): Boolean = bleKey != null
     }
 
     private class FakeMi(
@@ -270,9 +291,88 @@ class OnboardingViewModelTest {
         assertEquals(listOf(true), settings.onboardedCalls)
         assertEquals(1, settings.midCalls.size)
         assertEquals(1, settings.cutoffCalls.size)
+        assertEquals(1, settings.profileCalls.size)
+    }
+
+    @Test
+    fun completionPersistsProfileBeforeOnboarded() = runBlocking {
+        val settings = FakeSettings()
+        val vm = vm(settings, FakeVault())
+
+        vm.runToDone(historyChecked = false)
+        assertTrue("profile is written only at Finish", settings.profileCalls.isEmpty())
+
+        vm.complete()
+        assertEquals(listOf(Triple(180, 34, 1)), settings.profileCalls)
+        // The main screen's first sync reads the profile as soon as
+        // onboarded flips — it must already be on disk by then.
+        assertEquals(listOf("profile", "onboarded"), settings.order)
     }
 
     // ------------------------------------------------------- extraction path
+
+    @Test
+    fun freshViewModelSeedsKeyStatusFromVaultAndUnblocksNext() {
+        // Rotation / process death constructs a fresh VM at MI_KEYS while
+        // valid keys already sit in the vault.
+        val vault = FakeVault(
+            presetMac = "AA:BB:CC:DD:EE:FF",
+            presetToken = "0123456789abcdef01234567",
+            presetBleKey = "0123456789abcdef0123456789abcdef",
+        )
+        val vm = vm(FakeSettings(), vault)
+
+        val state = vm.state.value
+        assertEquals(OnboardingStep.MI_KEYS, state.step)
+        assertTrue("stored keys must show as present", state.macOk)
+        assertTrue(state.tokenOk)
+        assertTrue(state.bleKeyOk)
+        assertNull(state.error)
+
+        vm.nextFromKeys() // disabled/blocked before the fix
+        assertEquals(OnboardingStep.PROFILE, vm.state.value.step)
+    }
+
+    @Test
+    fun partialVaultSeedsPartialChecksAndKeepsNextBlocked() {
+        val vault = FakeVault(
+            presetMac = "AA:BB:CC:DD:EE:FF",
+            presetToken = "0123456789abcdef01234567",
+        )
+        val vm = vm(FakeSettings(), vault)
+
+        val state = vm.state.value
+        assertTrue(state.macOk)
+        assertTrue(state.tokenOk)
+        assertFalse("BLE KEY absent must stay unchecked", state.bleKeyOk)
+
+        vm.nextFromKeys()
+        assertEquals(OnboardingStep.MI_KEYS, vm.state.value.step)
+    }
+
+    @Test
+    fun nonSecretAnswersSurviveARestart() = runBlocking {
+        val vm = vm(FakeSettings(), FakeVault())
+        vm.runToDone(historyChecked = true)
+
+        // Rotation: the answers go through saved-instance state …
+        val saved = vm.answers()
+        // … and a brand-new VM applies them on top of vault-seeded flags.
+        val fresh = vm(FakeSettings(), FakeVault())
+        fresh.restore(saved)
+
+        val state = fresh.state.value
+        assertEquals(OnboardingStep.DONE, state.step)
+        assertEquals("180", state.heightCm)
+        assertEquals("34", state.age)
+        assertEquals(1, state.sex)
+        assertEquals("1", state.mid)
+        assertTrue(state.historyAlreadySynced)
+        assertTrue(state.garminSignedIn)
+        assertEquals("owner@example.com", state.garminUser)
+        assertFalse("completion itself is never restored", state.completed)
+        assertNull(state.error)
+    }
 
     @Test
     fun extractionStoresAllThreeKeysAndShowsGreenChecks() = runBlocking {

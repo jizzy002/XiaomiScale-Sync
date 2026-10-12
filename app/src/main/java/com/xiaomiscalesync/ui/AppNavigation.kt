@@ -11,10 +11,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,7 +31,9 @@ import com.xiaomiscalesync.ui.debug.SpikeScreen
 import com.xiaomiscalesync.ui.onboarding.GarminSso
 import com.xiaomiscalesync.ui.onboarding.MiCloudKeyExtractor
 import com.xiaomiscalesync.ui.onboarding.OnboardingScreen
+import com.xiaomiscalesync.ui.onboarding.OnboardingStep
 import com.xiaomiscalesync.ui.onboarding.OnboardingViewModel
+import com.xiaomiscalesync.ui.onboarding.WizardAnswers
 import com.xiaomiscalesync.xiaomi.MiCloudClient
 import okhttp3.OkHttpClient
 
@@ -65,11 +71,58 @@ fun AppNavigation() {
                 garmin = GarminSso(http, secrets),
             )
         }
+        // Rotation / process death: the non-secret answers ride in
+        // saved-instance state and are re-applied onto the fresh VM once
+        // (key presence re-seeds from Secrets inside the VM itself).
+        var saved by rememberSaveable(stateSaver = wizardSaver) {
+            mutableStateOf<WizardAnswers?>(null)
+        }
+        LaunchedEffect(viewModel) {
+            saved?.let(viewModel::restore)
+            viewModel.state.collect { saved = viewModel.answers() }
+        }
         OnboardingScreen(viewModel)
     } else {
         MainRoute()
     }
 }
+
+/**
+ * Bundles [WizardAnswers] as a flat list of primitives (step by name).
+ * Nothing secret is in it — passwords and key drafts never enter
+ * [WizardAnswers] at all. An unknown step name (app update renamed an
+ * enum) restores as null: the wizard simply starts over.
+ */
+private val wizardSaver: Saver<WizardAnswers?, Any> = listSaver(
+    save = { a ->
+        if (a == null) {
+            emptyList()
+        } else {
+            listOf(
+                a.step.name, a.manualMode, a.heightCm, a.age, a.sex, a.mid,
+                a.historyAlreadySynced, a.garminUser, a.garminSignedIn,
+            )
+        }
+    },
+    restore = { l ->
+        val step = OnboardingStep.entries.firstOrNull { it.name == l.getOrNull(0) }
+        if (l.size != 9 || step == null) {
+            null
+        } else {
+            WizardAnswers(
+                step = step,
+                manualMode = l[1] as Boolean,
+                heightCm = l[2] as String,
+                age = l[3] as String,
+                sex = l[4] as Int,
+                mid = l[5] as String,
+                historyAlreadySynced = l[6] as Boolean,
+                garminUser = l[7] as String,
+                garminSignedIn = l[8] as Boolean,
+            )
+        }
+    },
+)
 
 /**
  * The Main destination. Until plan Task 15 lands `MainScreen`, this

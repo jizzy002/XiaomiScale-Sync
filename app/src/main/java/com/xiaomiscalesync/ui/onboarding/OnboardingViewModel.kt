@@ -59,6 +59,27 @@ data class OnboardingState(
     val completed: Boolean = false,
 )
 
+/**
+ * The non-secret wizard answers that must survive rotation and process
+ * death (saved-instance state, see `AppNavigation.wizardSaver`).
+ *
+ * Deliberately excludes everything secret: typed passwords never enter
+ * [OnboardingState] at all (screen-local `remember`), manual key drafts
+ * are left out on purpose — key *presence* re-derives from [KeyVault] at
+ * construction, and the stored bytes stay in [com.xiaomiscalesync.data.Secrets].
+ */
+data class WizardAnswers(
+    val step: OnboardingStep,
+    val manualMode: Boolean,
+    val heightCm: String,
+    val age: String,
+    val sex: Int,
+    val mid: String,
+    val historyAlreadySynced: Boolean,
+    val garminUser: String,
+    val garminSignedIn: Boolean,
+)
+
 /** What `MiCloudClient.login` + `extractScale` yield for the wizard. */
 data class ExtractedKeys(
     val mac: String,
@@ -113,8 +134,57 @@ class OnboardingViewModel(
     private val nowUnix: () -> Long = { Clock.systemUTC().instant().epochSecond },
 ) {
 
-    private val _state = MutableStateFlow(OnboardingState())
+    private val _state = MutableStateFlow(
+        OnboardingState(
+            // Re-entry seeding (rotation / process death / relaunch): a
+            // fresh VM must show already-stored keys as present so the
+            // green checks are lit and "Next" is unblocked without a
+            // second Mi sign-in (2FA again) or a full re-paste.
+            macOk = secrets.hasMac(),
+            tokenOk = secrets.hasToken(),
+            bleKeyOk = secrets.hasBleKey(),
+        ),
+    )
     val state: StateFlow<OnboardingState> = _state.asStateFlow()
+
+    /**
+     * Snapshot of the non-secret answers for saved-instance state
+     * (nothing secret is included — see [WizardAnswers]).
+     */
+    fun answers(): WizardAnswers = _state.value.let {
+        WizardAnswers(
+            step = it.step,
+            manualMode = it.manualMode,
+            heightCm = it.heightCm,
+            age = it.age,
+            sex = it.sex,
+            mid = it.mid,
+            historyAlreadySynced = it.historyAlreadySynced,
+            garminUser = it.garminUser,
+            garminSignedIn = it.garminSignedIn,
+        )
+    }
+
+    /**
+     * Applies answers restored from saved-instance state onto this fresh
+     * VM. Key flags are intentionally untouched: they were seeded from
+     * [KeyVault] at construction and the vault — not the snapshot — is
+     * the source of truth for key presence.
+     */
+    fun restore(answers: WizardAnswers) = update {
+        it.copy(
+            step = answers.step,
+            manualMode = answers.manualMode,
+            heightCm = answers.heightCm,
+            age = answers.age,
+            sex = answers.sex,
+            mid = answers.mid,
+            historyAlreadySynced = answers.historyAlreadySynced,
+            garminUser = answers.garminUser,
+            garminSignedIn = answers.garminSignedIn,
+            error = null,
+        )
+    }
 
     private fun update(f: (OnboardingState) -> OnboardingState) {
         _state.value = f(_state.value)
@@ -315,18 +385,29 @@ class OnboardingViewModel(
      * The wizard's completion — the only place `onboarded` flips true.
      * Writes `mid` (blank falls back to [Settings.DEFAULT_MID]), the
      * backfill cutoff (`now` when the history question was checked,
-     * `null` when it was not), then `onboarded = true`. Idempotent: a
+     * `null` when it was not), the profile, then `onboarded = true`. Idempotent: a
      * second call is a no-op, so a double-tap or re-entry can never
      * rewrite the answers.
      */
     suspend fun complete() {
         val state = _state.value
         if (state.completed || state.busy) return
+        val height = state.heightCm.trim().toIntOrNull()
+        val age = state.age.trim().toIntOrNull()
+        if (height == null || age == null) {
+            // Only reachable via a restored snapshot that skipped step 2's
+            // validation — send the owner back there instead of crashing.
+            update { it.copy(step = OnboardingStep.PROFILE, error = "check height and age") }
+            return
+        }
         update { it.copy(busy = true, error = null) }
         try {
             val mid = state.mid.trim().ifBlank { Settings.DEFAULT_MID }
             settings.setMid(mid)
             settings.setBackfillCutoff(if (state.historyAlreadySynced) nowUnix() else null)
+            // nextFromProfile validated both; the profile lands before
+            // onboarded so Main's first sync already pushes the real answers.
+            settings.setProfile(heightCm = height, age = age, sex = state.sex)
             settings.setOnboarded(true)
             update { it.copy(completed = true, busy = false, mid = mid) }
         } catch (c: CancellationException) {
