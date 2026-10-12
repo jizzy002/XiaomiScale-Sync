@@ -31,8 +31,13 @@
         android:name="android.hardware.bluetooth_le"
         android:required="true" />
 
+    <!-- Secrets (data/Secrets.kt) are excluded from backups on every API
+         level: only Keystore-encrypted ciphertext is persisted, and it is
+         listed out of both rules files below. -->
     <application
-        android:label="Xiaomi Scale Sync">
+        android:label="Xiaomi Scale Sync"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules">
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 31+ (dataExtractionRules): same exclusions as backup_rules.xml —
+     Keystore-backed secrets and the debug screen's plain-prefs key store
+     are never backed up or device-transferred. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="secrets.xml" />
+        <exclude domain="sharedpref" path="milestone0_spike.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="secrets.xml" />
+        <exclude domain="sharedpref" path="milestone0_spike.xml" />
+    </device-transfer>
+</data-extraction-rules>

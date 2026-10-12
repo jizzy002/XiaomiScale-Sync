@@ -32,27 +32,42 @@ fun interface SettingsSource {
     suspend fun current(): Settings
 }
 
+/**
+ * Write seam for the three onboarding decisions (plan Task 14): `mid` and
+ * `backfillCutoff` are written once at wizard completion, `onboarded` flips
+ * true exactly then and only then. Lets `OnboardingViewModel`-level tests
+ * run on the JVM without DataStore.
+ */
+interface SettingsWriter {
+    suspend fun setOnboarded(v: Boolean)
+
+    /** Unix seconds; null clears the cutoff (fresh start, everything pushable). */
+    suspend fun setBackfillCutoff(v: Long?)
+
+    suspend fun setMid(v: String)
+}
+
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
-/** DataStore-backed [SettingsSource]; the app wires the application context once. */
-class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSource {
+/** DataStore-backed [SettingsSource]/[SettingsWriter]; the app wires the application context once. */
+class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSource, SettingsWriter {
 
     val settings: Flow<Settings> = dataStore.data.map { it.toSettings() }
 
     override suspend fun current(): Settings = settings.first()
 
-    suspend fun setOnboarded(v: Boolean) {
+    override suspend fun setOnboarded(v: Boolean) {
         dataStore.edit { it[KEY_ONBOARDED] = v }
     }
 
     /** Unix seconds; null clears the cutoff (fresh start, everything pushable). */
-    suspend fun setBackfillCutoff(v: Long?) {
+    override suspend fun setBackfillCutoff(v: Long?) {
         dataStore.edit { p ->
             if (v == null) p.remove(KEY_CUTOFF) else p[KEY_CUTOFF] = v
         }
     }
 
-    suspend fun setMid(v: String) {
+    override suspend fun setMid(v: String) {
         dataStore.edit { it[KEY_MID] = v }
     }
 
