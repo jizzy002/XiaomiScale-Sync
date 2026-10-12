@@ -105,7 +105,7 @@ class ScaleSession(
     /** Next outgoing tid (the scale picks its own tids for its events). */
     private val nextTid = AtomicInteger(1)
 
-    /** Serialises outgoing sends so ack pairing on [acks] stays unambiguous. */
+    /** Serialises outgoing sends so their framing handshakes on CMD cannot interleave. */
     private val sendMutex = Mutex()
 
     private var pumpJob: Job? = null
@@ -113,17 +113,22 @@ class ScaleSession(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /**
-     * Ack frames (`<rdy>`/`<ok>`/`<ack>`) the pump forwards from PROP while
-     * a send waits on them. The pump is the sole consumer of the PROP
-     * notification channel — it classifies every frame — so outgoing
-     * sends await their acks here instead of competing for the channel.
+     * RCV_* frames (`<rdy>`/`<ok>`/`<ack>`) the pump classifies on PROP.
+     * Session requests go on CMD and await their acks as CMD
+     * notifications, so nothing receives from here during a send — it
+     * exists so a stray ack on PROP cannot kill the pump (the scale's
+     * direction is PROP = scale→app values; its acks answer app sends on
+     * CMD, per the reference `send_value`/`_expect` pairing). [sendRequest]
+     * drains it after a failed send.
      */
     private val acks = Channel<ByteArray>(Channel.UNLIMITED)
 
     /**
-     * The transport outgoing sends see: writes pass through, but reads on
-     * PROP come from [acks] (fed by the pump) — [Framing.sendValue] then
-     * works unchanged while the pump keeps consuming everything else.
+     * The transport outgoing sends see: writes pass through, reads on CMD
+     * (where the scale's acks for app sends arrive) pass through to the
+     * transport's own channel, and PROP reads are redirected to [acks] —
+     * the pump stays PROP's sole consumer, so no send can steal a
+     * scale→app value from it.
      */
     private val sendTransport: BleTransport = object : BleTransport {
         override val notifications: Map<CharId, Channel<ByteArray>> =
@@ -348,7 +353,13 @@ class ScaleSession(
         pending.clear()
     }
 
-    /** Encrypts and sends one app→scale message on PROP (framed). */
+    /**
+     * Encrypts and sends one app→scale message on CMD — the reference's
+     * direction: `CMD 0x001a` is app→scale, `PROP 0x001b` is scale→app,
+     * and `send_value("CMD", …)` awaits its `RCV_RDY`/`RCV_OK` from CMD's
+     * own notifications. A request on PROP is never heard by the scale
+     * (it only sends there).
+     */
     private suspend fun sendRequest(plaintext: ByteArray) {
         val k = keys ?: throw ProtocolError("not logged in")
         sendMutex.withLock {
@@ -356,11 +367,14 @@ class ScaleSession(
             appCtr += 1
             val value = encryptValue(k.appKey, k.appIv, ctr, plaintext)
             try {
-                Framing.sendValue(sendTransport, CharId.PROP, TAG_SESSION, value, maxValue)
+                Framing.sendValue(sendTransport, CharId.CMD, TAG_SESSION, value, maxValue)
             } catch (e: Throwable) {
-                // A half-dead transfer can leave an ack in flight; drop it
-                // so the next send cannot pair with a stale ack.
+                // A half-dead transfer can leave an ack in flight — on CMD,
+                // where this send's acks arrive, or in the pump's PROP sink.
+                // Drop both so the next send cannot pair with a stale ack.
                 while (acks.tryReceive().isSuccess) { /* drain */ }
+                val cmd = transport.notifications.getValue(CharId.CMD)
+                while (cmd.tryReceive().isSuccess) { /* drain */ }
                 throw e
             }
         }
@@ -436,7 +450,7 @@ class ScaleSession(
         private val LOGIN_OK = hex("21000000")
         private val LOGIN_INFO = "mible-login-info".toByteArray(Charsets.US_ASCII)
 
-        /** The framing tag session values use on PROP. */
+        /** The framing tag session values use (app→scale on CMD, scale→app on PROP). */
         private const val TAG_SESSION = 0x01
 
         /** MIoT service ids the pump routes events by. */

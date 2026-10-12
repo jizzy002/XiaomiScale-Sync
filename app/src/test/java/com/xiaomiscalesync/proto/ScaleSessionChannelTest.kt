@@ -94,6 +94,51 @@ class ScaleSessionChannelTest {
         assertTrue("fake errors: ${fake.errors}", fake.errors.isEmpty())
     }
 
+    // ---------- direction: app→scale requests go on CMD (0x001a), never PROP ----------
+
+    /**
+     * Wire-truth pin, from the reference client (scale_reader.py):
+     * `UUIDS` says `CMD 0x001a (app->scale), PROP 0x001b (scale->app)`,
+     * and `request()` sends with `send_value("CMD", TAG_DATA, payload)`
+     * while the receive loop pumps only PROP. A request written to PROP
+     * is never heard by the scale (it only sends there), so the char of
+     * the encrypted hello/action bytes — not just their payload — is the
+     * contract.
+     */
+    @Test(timeout = 20_000)
+    fun sessionRequestsAreWrittenToCmdNeverProp() = withSession { session, fake, appEnd ->
+        session.hello()
+        session.action(7, 1, MiotCodec.param(1, ParamType.STRING, "{}"))
+
+        val appWrites = appEnd.wire.events.filter { it.fromFirst }
+        // The framing headers of the two session sends: 6 bytes,
+        // `00 00 00 <tag 0x01>` (the session tag) + parcel count.
+        val headers = appWrites.filter {
+            it.bytes.size == 6 && it.bytes[0] == 0.toByte() && it.bytes[1] == 0.toByte() &&
+                it.bytes[2] == 0.toByte() && it.bytes[3] == 0x01.toByte()
+        }
+        assertEquals("one session header per request", 2, headers.size)
+        assertTrue(
+            "session request headers written to ${headers.map { it.char }}, expected CMD " +
+                "(reference: app→scale values go on CMD 0x001a)",
+            headers.all { it.char == CharId.CMD },
+        )
+
+        // On PROP the app may only ever write the framing acks of the
+        // scale's own transfers; any other payload there means a request
+        // went the wrong way.
+        val framingAcks = listOf(hex("00000101"), hex("00000100"), hex("00000300"))
+        val propWrites = appWrites.filter { it.char == CharId.PROP }
+        for (frame in propWrites) {
+            assertTrue(
+                "app wrote a non-ack frame to PROP: " +
+                    frame.bytes.joinToString("") { "%02x".format(it) },
+                framingAcks.any { it.contentEquals(frame.bytes) },
+            )
+        }
+        assertTrue("fake errors: ${fake.errors}", fake.errors.isEmpty())
+    }
+
     // ---------- (b) action 7.1 returns the pinned result params ----------
 
     @Test(timeout = 20_000)

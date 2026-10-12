@@ -48,6 +48,13 @@ import javax.crypto.spec.SecretKeySpec
  * `HMAC-SHA256(app_key, rand_key+remote_key)`) and confirms with
  * `21000000` on LOGIN.
  *
+ * Direction (reference `UUIDS`: "CMD 0x001a (app->scale), PROP 0x001b
+ * (scale->app)"): app→scale session values are accepted — framing
+ * handshake included — only on CMD, and only the login stages accept
+ * values on AUTH; scale→app session values leave only on PROP
+ * ([replySession]); framing acks answer on the characteristic of their
+ * own transfer, like the reference `send_value`/`_expect` pairing.
+ *
  * With [failLoginUnlessOrdered] the scale simulates the reference's
  * stall: the `24000000` trigger is refused (responder error, no reply)
  * unless AUTH/CMD/PROP notifications were enabled first, the probe then
@@ -302,13 +309,26 @@ class FakeScale(
                     stage = Stage.WAIT_RAND_KEY
                 }
 
-                isHeader(frame) -> {
-                    val (_, data) = receiveFramed(t, char, frame)
-                    stage = Stage.IDLE
-                    if (char == CharId.PROP) {
-                        // Post-login the app sends its session messages on PROP.
+                isHeader(frame) -> when (char) {
+                    // Post-login session values: app→scale goes on CMD —
+                    // the reference's `UUIDS` line is "CMD 0x001a
+                    // (app->scale), PROP 0x001b (scale->app)", and its
+                    // request() sends with send_value("CMD", …). A framed
+                    // value on PROP is a direction bug, not a frame.
+                    CharId.CMD -> {
+                        val (_, data) = receiveFramed(t, char, frame)
                         handleSessionValue(t, data)
                     }
+
+                    // Framing-layer values below the session (FramingTest's
+                    // raw tag-0x0b send): acked and recorded, never
+                    // dispatched as a session message. The login stages
+                    // above gate AUTH during the miauth exchange itself.
+                    CharId.AUTH -> receiveFramed(t, char, frame)
+
+                    else -> throw ProtocolError(
+                        "scale got a framed value on $char: app→scale values go on CMD (0x001a)",
+                    )
                 }
 
                 else -> throw ProtocolError("scale got an unexpected frame on $char: ${frame.hex()}")
@@ -364,9 +384,11 @@ class FakeScale(
     }
 
     /**
-     * One encrypted session value from the app on PROP: decrypt it with
+     * One encrypted session value from the app on CMD: decrypt it with
      * the app-side keys (CTR from the value's frame) and answer — OP_HELLO
      * echo, action 7.1 (profile), 6.1 (fetch stored), 6.2 (delete).
+     * The answers go back on PROP (the scale's direction) via
+     * [replySession].
      */
     private suspend fun handleSessionValue(t: BleTransport, data: ByteArray) {
         val k = keys ?: throw ProtocolError("scale got a session value before login")
@@ -597,7 +619,7 @@ class FakeScale(
         const val TAG_REMOTE_KEY = 0x0d
         const val TAG_LOGIN_INFO = 0x0a
 
-        /** The framing tag session values use on PROP (both directions). */
+        /** The framing tag session values use (app→scale on CMD, scale→app on PROP). */
         const val TAG_SESSION = 0x01
 
         /** First tid the scale uses for its own events. */
