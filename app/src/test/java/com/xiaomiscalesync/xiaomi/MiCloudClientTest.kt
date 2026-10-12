@@ -5,6 +5,7 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -391,5 +392,122 @@ class MiCloudClientTest {
             ),
             attempts,
         )
+    }
+
+    // ------------------------------------------------------ review finding 1
+
+    /**
+     * The data classes must never print their secrets: a `Log.d("$device")`,
+     * an interpolated exception or a crash report would otherwise leak the
+     * cloud TOKEN / BLE KEY / ssecurity / serviceToken.
+     */
+    @Test
+    fun toStringNeverPrintsCloudSecrets() {
+        val device = ScaleDevice(
+            name = "Xiaomi Scale S200 1A2B",
+            mac = "AA:BB:CC:DD:EE:FF",
+            did = "blt.3.1001",
+            model = "xiaomi.scales.ms113",
+            tokenHex = scaleToken,
+            bleKeyHex = scaleBleKey,
+        )
+        val shown = device.toString()
+        assertFalse(shown, shown.contains(scaleToken))
+        assertFalse(shown, shown.contains(scaleBleKey))
+        assertTrue(shown, shown.contains("REDACTED"))
+        assertTrue(shown, shown.contains("blt.3.1001")) // non-secrets stay useful
+        // …and the data-class value semantics are untouched.
+        assertEquals(
+            device,
+            ScaleDevice(
+                name = "Xiaomi Scale S200 1A2B",
+                mac = "AA:BB:CC:DD:EE:FF",
+                did = "blt.3.1001",
+                model = "xiaomi.scales.ms113",
+                tokenHex = scaleToken,
+                bleKeyHex = scaleBleKey,
+            ),
+        )
+
+        val session = auth.toString()
+        assertFalse(session, session.contains(auth.serviceToken))
+        assertFalse(session, session.contains(auth.ssecurity))
+        assertTrue(session, session.contains("424242")) // userId stays readable
+        assertTrue(session, session.contains("REDACTED"))
+        assertEquals(auth, MiAuth(auth.ssecurity, "424242", auth.serviceToken))
+    }
+
+    // ------------------------------------------------------ review finding 2
+
+    /**
+     * The STS endpoint may set `serviceToken` on a **302 hop** and answer the
+     * redirect with a plain 200: every hop's Set-Cookie must be persisted, not
+     * only the final response's (the reference's `requests.Session` keeps them
+     * all).
+     */
+    @Test
+    fun loginSucceedsWhenTheServiceTokenIsSetOnARedirectHop() = runBlocking<Unit> {
+        fake.serviceLoginBody = """{"code":0,"_sign":"SIGN_FIXTURE"}"""
+        fake.auth2Body = """
+            {"code":0,"ssecurity":"SSEC_FROM_AUTH2","userId":"1234567",
+             "location":"${fake.accountBase}/sts","description":"ok"}
+        """.trimIndent().replace("\n", "")
+        fake.stsRedirectsToOk = true
+
+        val session = client().login("tester@example.com", "hunter2-secret")
+
+        assertEquals("SERVICE_TOKEN_1", session.serviceToken)
+        // The cookie came from the 302 hop, so both hops must have been hit
+        // (the fake only sets it on the redirect).
+        assertTrue(
+            "the STS endpoint was never asked",
+            fake.requests.any { it.requestUrl!!.encodedPath == "/sts" },
+        )
+        assertTrue(
+            "the STS redirect was never followed",
+            fake.requests.any { it.requestUrl!!.encodedPath == "/sts/ok" },
+        )
+        // …and the cookie captured from the 302 goes back out on hop 2, the
+        // way the reference's requests.Session replays it.
+        val hop2 = fake.requests.first { it.requestUrl!!.encodedPath == "/sts/ok" }
+        val hop2Cookies = hop2.getHeader("Cookie") ?: ""
+        assertTrue(hop2Cookies, hop2Cookies.contains("serviceToken=SERVICE_TOKEN_1"))
+    }
+
+    // ------------------------------------------------------ review finding 3
+
+    /**
+     * A rejected session (expired serviceToken) must surface as a typed
+     * [MiApiError], never as "the account has no scale".
+     */
+    @Test
+    fun extractScaleThrowsMiApiErrorWhenTheSessionIsRejected() {
+        fake.apiStatus["de"] = 401
+        val error = assertThrows(MiApiError::class.java) {
+            runBlocking { client().extractScale(auth) }
+        }
+        assertEquals(401, error.code)
+        assertEquals("de", error.region)
+        assertEquals("/v2/homeroom/gethome", error.path)
+        assertTrue(error.message!!, error.message!!.contains("401"))
+    }
+
+    /** A server failure is likewise an error, not an empty inventory. */
+    @Test
+    fun extractScaleThrowsMiApiErrorOnServerFailure() {
+        fake.apiStatus["de"] = 500
+        val error = assertThrows(MiApiError::class.java) {
+            runBlocking { client().extractScale(auth) }
+        }
+        assertEquals(500, error.code)
+    }
+
+    /** …while a genuinely empty inventory still answers null. */
+    @Test
+    fun extractScaleReturnsNullWhenTheInventoryIsEmpty() = runBlocking<Unit> {
+        fake.gethome["de"] =
+            """{"code":0,"result":{"homelist":[{"id":700000001,"name":"Home"}]}}"""
+        fake.deviceList["de"] = """{"code":0,"result":{"device_info":[]}}"""
+        assertNull(client().extractScale(auth))
     }
 }

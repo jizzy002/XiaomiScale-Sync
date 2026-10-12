@@ -8,9 +8,11 @@ import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
+import okhttp3.CookieJar
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -26,7 +28,17 @@ data class ScaleDevice(
     val tokenHex: String?,
     /** BLE KEY from `blt_get_beaconkey`, 32 hex chars (16 bytes); null if absent. */
     val bleKeyHex: String?,
-)
+) {
+    /**
+     * Redacted on purpose: `tokenHex` and `bleKeyHex` are secrets, and a
+     * data-class `toString()` would print them into any log line, exception
+     * message or crash report that interpolates this object.
+     * `equals`/`hashCode` keep their generated (full-field) semantics.
+     */
+    override fun toString(): String =
+        "ScaleDevice(name=$name, mac=$mac, did=$did, model=$model, " +
+            "tokenHex=${seal(tokenHex)}, bleKeyHex=${seal(bleKeyHex)})"
+}
 
 /** An authenticated Mi Cloud session ([MiCloudClient.login]'s result). */
 data class MiAuth(
@@ -34,7 +46,15 @@ data class MiAuth(
     val ssecurity: String,
     val userId: String,
     val serviceToken: String,
-)
+) {
+    /** Secrets redacted for the same reason as [ScaleDevice.toString]. */
+    override fun toString(): String =
+        "MiAuth(ssecurity=${seal(ssecurity)}, userId=$userId, " +
+            "serviceToken=${seal(serviceToken)})"
+}
+
+/** Masks a secret in diagnostics: `null` stays `null`, anything else is `REDACTED`. */
+private fun seal(value: String?): String = if (value == null) "null" else "REDACTED"
 
 /** Base type for every Xiaomi-cloud failure this client raises. */
 open class MiCloudException(message: String, cause: Throwable? = null) :
@@ -54,6 +74,18 @@ class MiSecondFactorCancelled :
 /** The scale was found but a required cloud field is missing or malformed. */
 class MiFieldError(val field: String, val did: String, reason: String) :
     MiCloudException(reason)
+
+/**
+ * A signed API call answered with a non-200 status: the session was
+ * rejected (401/403, e.g. an expired serviceToken) or the cloud failed
+ * (500…). Deliberately *not* reported as an empty inventory — "no scale
+ * found" and "the session was refused" must never look alike upstream.
+ *
+ * [region] and [path] identify the call; no URL, signature or token is
+ * part of the message.
+ */
+class MiApiError(val code: Int, val region: String, val path: String) :
+    MiCloudException("Xiaomi cloud API $region$path failed (HTTP $code)")
 
 /**
  * Xiaomi cloud client: Mi Account sign-in (with the email-2FA branch) and
@@ -120,8 +152,20 @@ class MiCloudClient(
 
     private val accountHost: String by lazy { accountBaseUrl.toHttpUrl().host }
 
+    /**
+     * The client every call runs through: the caller's [http] plus the
+     * per-hop cookie jar below (a caller-configured jar is overridden — this
+     * client owns its session cookies).
+     */
+    private val client: OkHttpClient by lazy {
+        http.newBuilder()
+            .cookieJar(hopCookies)
+            .addNetworkInterceptor(replaySessionCookies)
+            .build()
+    }
+
     private val noRedirect: OkHttpClient by lazy {
-        http.newBuilder().followRedirects(false).followSslRedirects(false).build()
+        client.newBuilder().followRedirects(false).followSslRedirects(false).build()
     }
 
     /** Session cookie store — the reference's `requests.Session` jar. */
@@ -138,6 +182,60 @@ class MiCloudClient(
         for (domain in listOf("mi.com", "xiaomi.com", accountHost)) {
             put("deviceId", deviceId, domain)
         }
+    }
+
+    /**
+     * Per-hop cookie persistence (review finding 2). OkHttp runs its
+     * cookie bridge **once per redirect hop** and hands every hop's
+     * `Set-Cookie` headers to [CookieJar.saveFromResponse], so a cookie set
+     * on a 302 — the STS shape — is stored here instead of being dropped
+     * together with the intermediate response that [execute] never sees.
+     *
+     * [CookieJar.loadForRequest] deliberately answers nothing: this client
+     * builds the reference's exact `Cookie` header itself, and a non-empty
+     * jar answer would *replace* it — [replaySessionCookies] puts the stored
+     * cookies back where they belong instead.
+     */
+    private val hopCookies: CookieJar = object : CookieJar {
+        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) = storeCookies(cookies)
+        override fun loadForRequest(url: HttpUrl): List<Cookie> = emptyList()
+    }
+
+    /**
+     * Second half of the per-hop fix: OkHttp rebuilds every redirect from the
+     * *original* request, so a cookie stored from hop 1 would never reach hop
+     * 2 — while the reference's `requests.Session` sends it. A network
+     * interceptor runs once per hop (after the cookie bridge), so it can add
+     * the session cookies that hop is missing. Names already present in the
+     * request's own `Cookie` header win, keeping the pinned wire shape
+     * byte-identical for the calls that spell their cookies out.
+     */
+    private val replaySessionCookies = Interceptor { chain ->
+        val request = chain.request()
+        val explicit = request.header("Cookie")
+        val merged = LinkedHashMap<String, String>()
+        explicit?.split("; ")?.forEach { pair ->
+            val eq = pair.indexOf('=')
+            if (eq > 0) merged[pair.substring(0, eq)] = pair.substring(eq + 1)
+        }
+        var added = false
+        for ((name, value) in cookies.cookiesFor(request.url.host)) {
+            if (name !in merged) {
+                merged[name] = value
+                added = true
+            }
+        }
+        if (added) {
+            val header = merged.entries.joinToString("; ") { (name, value) -> "$name=$value" }
+            chain.proceed(request.newBuilder().header("Cookie", header).build())
+        } else {
+            chain.proceed(request)
+        }
+    }
+
+    /** Copies parsed cookies into the session store (never logged). */
+    private fun storeCookies(received: List<Cookie>) {
+        for (cookie in received) cookies.put(cookie.name, cookie.value, cookie.domain)
     }
 
     // --------------------------------------------------------------- login
@@ -379,7 +477,9 @@ class MiCloudClient(
      * [MiFieldError] when a scale exists but a required field is missing or
      * malformed (token, did, or a non-32-hex beacon key). A missing
      * beacon-key result is not an error: `bleKeyHex` is simply null, which
-     * the sync layer degrades for (broadcast decryption unavailable).
+     * the sync layer degrades for (broadcast decryption unavailable). Throws
+     * [MiApiError] when any signed call answers non-200 — a rejected session
+     * or a server failure is never mistaken for an empty inventory.
      */
     suspend fun extractScale(auth: MiAuth): ScaleDevice? = withContext(Dispatchers.IO) {
         val order = (listOfNotNull(preferredRegion) + regions).distinct()
@@ -489,7 +589,7 @@ class MiCloudClient(
                 .header("MIOT-ENCRYPT-ALGORITHM", "ENCRYPT-RC4")
                 .header("Cookie", apiCookieHeader(auth, target.toHttpUrl().host)),
         )
-        if (response.code != 200) return null
+        if (response.code != 200) throw MiApiError(response.code, region, path)
         val decrypted = try {
             MiSigner.decryptResponse(signedNonce, response.body)
         } catch (e: Exception) {
@@ -539,8 +639,10 @@ class MiCloudClient(
     private class HttpResult(val code: Int, val body: String, val headers: Headers, val url: HttpUrl)
 
     private fun execute(builder: Request.Builder, followRedirects: Boolean = true): HttpResult {
-        val client = if (followRedirects) http else noRedirect
-        client.newCall(builder.build()).execute().use { response ->
+        val callClient = if (followRedirects) client else noRedirect
+        callClient.newCall(builder.build()).execute().use { response ->
+            // Hops were already stored by [hopCookies]; this covers the final
+            // response too, so the store never depends on one code path.
             cookies.capture(response.request.url, response.headers)
             return HttpResult(
                 response.code,

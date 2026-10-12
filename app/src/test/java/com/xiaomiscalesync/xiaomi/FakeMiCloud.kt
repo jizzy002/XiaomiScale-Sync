@@ -31,6 +31,13 @@ class FakeMiCloud : AutoCloseable {
     var auth2Code = 200
     var auth2Body = """{"code":0}"""
     var stsServiceToken: String? = "serviceToken=SERVICE_TOKEN_1"
+
+    /**
+     * When true, `/sts` answers **302 → /sts/ok** and sets its cookie on the
+     * redirect hop only — the shape that breaks a client which captures
+     * Set-Cookie from the final response alone.
+     */
+    var stsRedirectsToOk = false
     var ickCookie: String? = "ick=ICK_COOKIE_1"
     var verifyEmailCode = 200
     var verifyEmailBody: String = ""
@@ -44,6 +51,13 @@ class FakeMiCloud : AutoCloseable {
     val deviceCount = mutableMapOf<String, String>()
     val deviceList = mutableMapOf<String, String>()
     val beaconKey = mutableMapOf<String, String>()
+
+    /**
+     * region → HTTP status every encrypted endpoint in that region must
+     * answer (401 = rejected session, 500 = server failure, …), bypassing
+     * the protocol. Empty = answer normally.
+     */
+    val apiStatus = mutableMapOf<String, Int>()
 
     /** Paths served with an `extension-pragma` response header. */
     val pragmaPaths = CopyOnWriteArrayList<String>()
@@ -85,8 +99,16 @@ class FakeMiCloud : AutoCloseable {
                     path == "/pass/serviceLoginAuth2" ->
                         json(auth2Code, auth2Body)
                     path == "/sts" ->
+                        if (stsRedirectsToOk) {
+                            MockResponse().setResponseCode(302)
+                                .setHeader("Location", server.url("/sts/ok").toString())
+                                .withSetCookie(stsServiceToken)
+                        } else {
+                            json(200, """{"code":0,"description":"ok"}""")
+                                .withSetCookie(stsServiceToken)
+                        }
+                    path == "/sts/ok" ->
                         json(200, """{"code":0,"description":"ok"}""")
-                            .withSetCookie(stsServiceToken)
                     path == "/authStart" ->
                         json(200, "{}")
                     path == "/identity/list" ->
@@ -108,7 +130,9 @@ class FakeMiCloud : AutoCloseable {
                             .apply { endPragmaHeader?.let { addHeader("extension-pragma", it) } }
                     }
                     path.contains("/app/v2/") ->
-                        encryptedResponse(request, path, regionOf(path))
+                        apiStatus[regionOf(path)]?.let { status ->
+                            json(status, """{"code":$status,"description":"forced by test"}""")
+                        } ?: encryptedResponse(request, path, regionOf(path))
                     else -> MockResponse().setResponseCode(404).setBody("no route: $path")
                 }
             }
