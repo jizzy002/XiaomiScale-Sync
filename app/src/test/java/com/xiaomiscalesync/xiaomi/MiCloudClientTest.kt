@@ -2,9 +2,11 @@ package com.xiaomiscalesync.xiaomi
 
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -133,11 +135,201 @@ class MiCloudClientTest {
 
     @Test
     fun captchaChallengeThrowsMiLoginBlocked() {
-        fake.auth2Body =
-            """{"code":27001,"captchaUrl":"https://account.xiaomi.com/checksec/captcha?sid=xiaomiio"}"""
-        assertThrows(MiLoginBlocked::class.java) {
+        val captchaUrl = "https://account.xiaomi.com/checksec/captcha?sid=xiaomiio"
+        fake.auth2Body = """{"code":27001,"captchaUrl":"$captchaUrl"}"""
+        val error = assertThrows(MiLoginBlocked::class.java) {
             runBlocking { client().login("tester@example.com", "hunter2-secret") }
         }
+        // Default (no onCaptcha): today's behavior exactly — blocked with the
+        // URL for the manual fallback, and the image is never even fetched.
+        assertEquals(captchaUrl, error.captchaUrl)
+        assertTrue(
+            "the captcha image must not be fetched without a prompt",
+            fake.requests.none { it.requestUrl?.encodedPath == "/checksec/captcha" },
+        )
+    }
+
+    // ---------------------------------------------------------------- captcha
+
+    /**
+     * The reference's captcha branch (`login_step_2` lines 336–354 +
+     * `handle_captcha` 389–413): captchaUrl → image GET on the session →
+     * user code → re-POST the same fields with `captCode` → ssecurity.
+     */
+    @Test
+    fun captchaFlowFetchesImageWithSessionAndRetriesWithCaptCode() = runBlocking<Unit> {
+        val captchaUrl = "${fake.accountBase}/checksec/captcha?sid=xiaomiio"
+        fake.auth2Body = """{"code":27001,"captchaUrl":"$captchaUrl"}"""
+        fake.auth2CaptCodeBody =
+            """{"code":0,"ssecurity":"SSEC_AFTER_CAPTCHA","userId":"998877","location":"${fake.accountBase}/sts","description":"ok"}"""
+
+        var shownImage: ByteArray? = null
+        var shownUrl: String? = null
+        val session = client().login(
+            "tester@example.com",
+            "hunter2-secret",
+            onCaptcha = { image, url ->
+                shownImage = image
+                shownUrl = url
+                " 4JX9 " // stray whitespace is stripped, like the reference
+            },
+        )
+
+        assertEquals("SSEC_AFTER_CAPTCHA", session.ssecurity)
+        assertEquals("998877", session.userId)
+        assertEquals("SERVICE_TOKEN_1", session.serviceToken)
+
+        // The raw image bytes reach the prompt untouched (not JSON-mangled).
+        assertArrayEquals(fake.captchaImage, shownImage)
+        assertEquals(captchaUrl, shownUrl)
+
+        // The image GET rides the session: same user-agent + session cookies.
+        val imageGet = fake.requests.first { it.requestUrl!!.encodedPath == "/checksec/captcha" }
+        assertEquals("GET", imageGet.method)
+        assertEquals(
+            "test-agent-abcdefghijk APP/com.xiaomi.mihome APPV/10.5.201",
+            imageGet.getHeader("User-Agent"),
+        )
+        val cookie = imageGet.getHeader("Cookie")!!
+        assertTrue(cookie, cookie.contains("sdkVersion=accountsdk-18.8.15"))
+        assertTrue(cookie, cookie.contains("deviceId=abcdef"))
+
+        // The retried POST = the same fields + `captCode` appended (line 344).
+        val posts = fake.requests
+            .filter { it.requestUrl!!.encodedPath == "/pass/serviceLoginAuth2" }
+        assertEquals(2, posts.size)
+        assertNull(posts[0].requestUrl!!.queryParameter("captCode"))
+        val retry = posts[1].requestUrl!!
+        assertEquals("4JX9", retry.queryParameter("captCode"))
+        assertEquals("xiaomiio", retry.queryParameter("sid"))
+        assertEquals(md5Upper("hunter2-secret"), retry.queryParameter("hash"))
+        assertEquals("%3Fsid%3Dxiaomiio%26_json%3Dtrue", retry.queryParameter("qs"))
+        assertEquals("tester@example.com", retry.queryParameter("user"))
+        assertEquals("SIGN_FIXTURE", retry.queryParameter("_sign"))
+        assertEquals("true", retry.queryParameter("_json"))
+        assertEquals("POST", posts[1].method)
+        assertEquals(0L, posts[1].bodySize)
+    }
+
+    /** 87001 (invalid captcha) → ask again; the second code is the one used. */
+    @Test
+    fun invalidCaptchaAsksAgainAndTheSecondCodeWins() = runBlocking<Unit> {
+        val captchaUrl = "${fake.accountBase}/checksec/captcha?sid=xiaomiio"
+        fake.auth2Body = """{"code":27001,"captchaUrl":"$captchaUrl"}"""
+        fake.auth2ByCaptCode["WRONG-1"] = """{"code":87001,"description":"invalid captcha"}"""
+        fake.auth2ByCaptCode["RIGHT-2"] =
+            """{"code":0,"ssecurity":"SSEC_AFTER_CAPTCHA","userId":"998877","location":"${fake.accountBase}/sts","description":"ok"}"""
+
+        val asked = mutableListOf<String>()
+        val session = client().login(
+            "tester@example.com",
+            "hunter2-secret",
+            onCaptcha = { _, _ ->
+                val code = if (asked.isEmpty()) "WRONG-1" else "RIGHT-2"
+                asked += code
+                code
+            },
+        )
+
+        assertEquals(listOf("WRONG-1", "RIGHT-2"), asked)
+        assertEquals("SSEC_AFTER_CAPTCHA", session.ssecurity)
+        assertEquals("SERVICE_TOKEN_1", session.serviceToken)
+        val codes = fake.requests
+            .filter { it.requestUrl!!.encodedPath == "/pass/serviceLoginAuth2" }
+            .mapNotNull { it.requestUrl!!.queryParameter("captCode") }
+        assertEquals(listOf("WRONG-1", "RIGHT-2"), codes)
+    }
+
+    /** 3× 87001 → give up with MiLoginFailed("invalid captcha"), 3 asks only. */
+    @Test
+    fun threeInvalidCaptchaAnswersFailWithInvalidCaptcha() {
+        val captchaUrl = "${fake.accountBase}/checksec/captcha?sid=xiaomiio"
+        fake.auth2Body = """{"code":27001,"captchaUrl":"$captchaUrl"}"""
+        fake.auth2CaptCodeBody = """{"code":87001,"description":"invalid captcha"}"""
+
+        var asks = 0
+        val error = assertThrows(MiLoginFailed::class.java) {
+            runBlocking {
+                client().login(
+                    "tester@example.com",
+                    "hunter2-secret",
+                    onCaptcha = { _, _ -> asks++; "TRY-$asks" },
+                )
+            }
+        }
+        assertEquals("invalid captcha", error.message)
+        assertEquals(3, asks)
+        val codes = fake.requests
+            .filter { it.requestUrl!!.encodedPath == "/pass/serviceLoginAuth2" }
+            .mapNotNull { it.requestUrl!!.queryParameter("captCode") }
+        assertEquals(listOf("TRY-1", "TRY-2", "TRY-3"), codes)
+    }
+
+    /** onCaptcha returning null = user cancelled → MiLoginBlocked, no retry. */
+    @Test
+    fun captchaPromptCancellationThrowsMiLoginBlocked() {
+        val captchaUrl = "${fake.accountBase}/checksec/captcha?sid=xiaomiio"
+        fake.auth2Body = """{"code":27001,"captchaUrl":"$captchaUrl"}"""
+
+        var asks = 0
+        val error = assertThrows(MiLoginBlocked::class.java) {
+            runBlocking {
+                client().login(
+                    "tester@example.com",
+                    "hunter2-secret",
+                    onCaptcha = { _, _ -> asks++; null },
+                )
+            }
+        }
+        assertEquals(captchaUrl, error.captchaUrl)
+        assertEquals(1, asks)
+        // Cancelled before any retry: exactly one auth2 POST, no captCode.
+        val posts = fake.requests
+            .filter { it.requestUrl!!.encodedPath == "/pass/serviceLoginAuth2" }
+        assertEquals(1, posts.size)
+        assertNull(posts[0].requestUrl!!.queryParameter("captCode"))
+    }
+
+    /**
+     * A relative captchaUrl gets the `https://account.xiaomi.com` prefix
+     * (reference lines 391–392). A test interceptor captures the outbound
+     * URL *and* rewrites the host to the fake, so nothing leaves the JVM.
+     */
+    @Test
+    fun relativeCaptchaUrlIsPrefixedWithTheAccountHost() = runBlocking<Unit> {
+        fake.auth2Body = """{"code":27001,"captchaUrl":"/checksec/captcha?sid=xiaomiio"}"""
+        fake.auth2CaptCodeBody =
+            """{"code":0,"ssecurity":"SSEC_AFTER_CAPTCHA","userId":"998877","location":"${fake.accountBase}/sts","description":"ok"}"""
+
+        val outbound = AtomicReference<String>()
+        val accountShim = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            if (request.url.host == "account.xiaomi.com") {
+                outbound.set(request.url.toString())
+                val target = fake.server.url(request.url.encodedPath).newBuilder()
+                    .encodedQuery(request.url.encodedQuery)
+                    .build()
+                chain.proceed(request.newBuilder().url(target).build())
+            } else {
+                chain.proceed(request)
+            }
+        }.build()
+
+        var shownUrl: String? = null
+        val session = client(http = accountShim).login(
+            "tester@example.com",
+            "hunter2-secret",
+            onCaptcha = { _, url -> shownUrl = url; "7Q2P" },
+        )
+
+        val expected = "https://account.xiaomi.com/checksec/captcha?sid=xiaomiio"
+        assertEquals(expected, shownUrl)
+        assertEquals(expected, outbound.get())
+        assertEquals("SSEC_AFTER_CAPTCHA", session.ssecurity)
+        // …and the rewritten request reached the fake with its query intact.
+        val imageGet = fake.requests.first { it.requestUrl!!.encodedPath == "/checksec/captcha" }
+        assertEquals("xiaomiio", imageGet.requestUrl!!.queryParameter("sid"))
+        assertTrue(imageGet.getHeader("Cookie")!!.contains("sdkVersion=accountsdk-18.8.15"))
     }
 
     // ------------------------------------------------------------------- 2FA

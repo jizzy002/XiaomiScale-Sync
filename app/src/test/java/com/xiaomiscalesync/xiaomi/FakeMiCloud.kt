@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okio.Buffer
 
 /**
  * A fake Xiaomi cloud on MockWebServer that speaks both halves of the
@@ -30,6 +31,20 @@ class FakeMiCloud : AutoCloseable {
     var serviceLoginBody = """{"code":0,"_sign":"SIGN_FIXTURE"}"""
     var auth2Code = 200
     var auth2Body = """{"code":0}"""
+
+    /**
+     * Captcha fixtures (reference `login_step_2` + `handle_captcha`):
+     * `/checksec/captcha` answers with [captchaImage] (arbitrary bytes — the
+     * client must pass them through raw), and a `serviceLoginAuth2` retry
+     * that carries a `captCode` is answered from [auth2ByCaptCode] (keyed
+     * by the code's value) or [auth2CaptCodeBody] as the fallback.
+     */
+    var captchaImage: ByteArray = byteArrayOf(
+        0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF.toByte(), 0x42,
+    )
+    var captchaImageCode = 200
+    val auth2ByCaptCode = mutableMapOf<String, String>()
+    var auth2CaptCodeBody: String? = null
     var stsServiceToken: String? = "serviceToken=SERVICE_TOKEN_1"
 
     /**
@@ -96,8 +111,20 @@ class FakeMiCloud : AutoCloseable {
                 return when {
                     path == "/pass/serviceLogin" ->
                         json(serviceLoginCode, serviceLoginBody)
-                    path == "/pass/serviceLoginAuth2" ->
-                        json(auth2Code, auth2Body)
+                    path == "/pass/serviceLoginAuth2" -> {
+                        // A `captCode` retry (reference lines 344–350) is
+                        // answered per-code so tests can script 87001 → ok.
+                        val captCode = url.queryParameter("captCode")
+                        json(
+                            auth2Code,
+                            if (captCode == null) auth2Body
+                            else auth2ByCaptCode[captCode] ?: auth2CaptCodeBody ?: auth2Body,
+                        )
+                    }
+                    path == "/checksec/captcha" ->
+                        MockResponse().setResponseCode(captchaImageCode)
+                            .setBody(Buffer().write(captchaImage))
+                            .setHeader("Content-Type", "image/png")
                     path == "/sts" ->
                         if (stsRedirectsToOk) {
                             MockResponse().setResponseCode(302)

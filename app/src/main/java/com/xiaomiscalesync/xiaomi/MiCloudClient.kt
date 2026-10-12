@@ -103,7 +103,8 @@ class MiNetworkError(val region: String, val path: String, cause: IOException) :
  * the RC4-signed Mi Cloud API used to extract the scale's MAC, TOKEN and
  * BLE KEY. Kotlin port of the reference client's login + device-list flow
  * (Xiaomi-cloud-tokens-extractor's `token_extractor.py`: password login
- * steps 1–3, the `identity` 2FA chain, `execute_api_call_encrypted`,
+ * steps 1–3 with the `handle_captcha` branch, the `identity` 2FA chain,
+ * `execute_api_call_encrypted`,
  * and the homeroom/home_device_list/blt_get_beaconkey walk).
  *
  * Secrets (ssecurity, serviceToken, TOKEN, BLE KEY) are never logged;
@@ -152,6 +153,19 @@ class MiCloudClient(
         private const val HOMES_DATA =
             """{"fg": true, "fetch_share": true, "fetch_share_dev": true, "limit": 300, "app_ver": 7}"""
         private const val DEVICE_COUNT_DATA = """{ "fetch_own": true, "fetch_share": true}"""
+
+        /**
+         * The reference's `handle_captcha` prefix for relative captcha URLs
+         * (token_extractor.py lines 391–392) — the production value of the
+         * account host, spelled out the way the reference spells it.
+         */
+        private const val CAPTCHA_URL_PREFIX = "https://account.xiaomi.com"
+
+        /** Total captcha attempts before [MiLoginFailed] (controller ruling). */
+        private const val MAX_CAPTCHA_ATTEMPTS = 3
+
+        /** JSON `code` the account service answers for a wrong captcha code. */
+        private const val INVALID_CAPTCHA_CODE = 87001
 
         /** Exact reference template (note its spacing — signed verbatim). */
         fun deviceListData(ownerId: String, homeId: String): String =
@@ -257,12 +271,22 @@ class MiCloudClient(
      * prompt text when Xiaomi demands email 2FA and returns the emailed
      * code (or null to cancel → [MiSecondFactorCancelled]).
      *
-     * Throws [MiLoginBlocked] on a captcha challenge (the UI falls back to
-     * manual key paste) and [MiLoginFailed] for every other failure.
+     * [onCaptcha] receives the raw captcha image bytes plus the (resolved)
+     * captcha URL when Xiaomi demands a captcha, and returns the typed code
+     * (or null to cancel → [MiLoginBlocked]). An invalid code (JSON
+     * `code == 87001`) is re-asked, at most [MAX_CAPTCHA_ATTEMPTS] attempts
+     * total, then [MiLoginFailed]. When [onCaptcha] is null — the default —
+     * a captcha challenge throws [MiLoginBlocked] immediately, exactly as
+     * before (the UI falls back to manual key paste).
+     *
+     * Throws [MiLoginFailed] for every other failure. Neither image bytes
+     * nor typed codes appear in any exception message; this class performs
+     * no logging at all.
      */
     suspend fun login(
         username: String,
         password: String,
+        onCaptcha: (suspend (image: ByteArray, captchaUrl: String) -> String?)? = null,
         onSecondFactor: suspend (prompt: String) -> String? = { null },
     ): MiAuth = withContext(Dispatchers.IO) {
         var sign: String? = null
@@ -304,22 +328,33 @@ class MiCloudClient(
                 "_sign" to signValue,
                 "_json" to "true",
             )
-            val step2 = execute(
-                Request.Builder()
-                    .url("$accountBaseUrl/pass/serviceLoginAuth2?${encodeQuery(fields)}")
-                    .post(EMPTY_BODY)
-                    .header("User-Agent", userAgent)
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .header("Cookie", cookieHeader(accountHost)),
-                followRedirects = false,
-            )
-            if (step2.code != 200) {
-                throw MiLoginFailed("serviceLoginAuth2 failed (HTTP ${step2.code})")
+            var s2 = postAuth2(fields)
+
+            // Captcha branch of login_step_2 (reference lines 336–354) with
+            // handle_captcha (389–413): fetch the image on this session,
+            // hand its raw bytes + the resolved URL to [onCaptcha], then
+            // re-POST the same fields with `captCode` appended. Code 87001
+            // = invalid captcha → ask again (the reference stops there; the
+            // controller ruling allows MAX_CAPTCHA_ATTEMPTS total).
+            val challenge = s2.string("captchaUrl")
+            if (challenge != null) {
+                val captchaPrompt = onCaptcha ?: throw MiLoginBlocked(challenge)
+                val image = fetchCaptcha(challenge)
+                var attempt = 1
+                while (true) {
+                    // null = the user cancelled the captcha dialog; the
+                    // code itself is stripped like the reference's
+                    // `input().strip()` (line 406).
+                    val solution = captchaPrompt(image, resolveCaptchaUrl(challenge))
+                        ?.trim()
+                        ?: throw MiLoginBlocked(challenge)
+                    s2 = postAuth2(fields + ("captCode" to solution))
+                    if (s2.string("code")?.toIntOrNull() != INVALID_CAPTCHA_CODE) break
+                    if (attempt >= MAX_CAPTCHA_ATTEMPTS) throw MiLoginFailed("invalid captcha")
+                    attempt++
+                }
             }
-            val s2 = step2.json()
-                ?: throw MiLoginFailed("serviceLoginAuth2 returned unparseable JSON")
-            val captcha = s2.string("captchaUrl")
-            if (captcha != null) throw MiLoginBlocked(captcha)
+
             val sec = s2.string("ssecurity")
             if (sec != null && sec.length > 4) {
                 ssecurity = sec
@@ -593,6 +628,60 @@ class MiCloudClient(
 
     // ------------------------------------------------------------- plumbing
 
+    /**
+     * The reference's `login_step_2` POST (lines 318–331, and the `captCode`
+     * retry of lines 344–350 — same URL, same fields plus one key): fields
+     * in the query string, empty body, redirects off, HTTP 200 + parseable
+     * JSON required.
+     */
+    private fun postAuth2(fields: Map<String, String>): JsonObject {
+        val response = execute(
+            Request.Builder()
+                .url("$accountBaseUrl/pass/serviceLoginAuth2?${encodeQuery(fields)}")
+                .post(EMPTY_BODY)
+                .header("User-Agent", userAgent)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Cookie", cookieHeader(accountHost)),
+            followRedirects = false,
+        )
+        if (response.code != 200) {
+            throw MiLoginFailed("serviceLoginAuth2 failed (HTTP ${response.code})")
+        }
+        return response.json()
+            ?: throw MiLoginFailed("serviceLoginAuth2 returned unparseable JSON")
+    }
+
+    /**
+     * The reference's `handle_captcha` URL resolution (lines 391–392): a
+     * relative captcha URL is prefixed with the account host.
+     */
+    private fun resolveCaptchaUrl(captchaUrl: String): String =
+        if (captchaUrl.startsWith("/")) CAPTCHA_URL_PREFIX + captchaUrl else captchaUrl
+
+    /**
+     * The reference's `handle_captcha` image download (lines 394–397): GET
+     * the captcha URL on the same session — same user-agent and cookie
+     * handling as every other account call — and return the **raw bytes**
+     * (never JSON-parsed, never logged). The caller hands them straight to
+     * the prompt.
+     */
+    private fun fetchCaptcha(captchaUrl: String): ByteArray {
+        val url = resolveCaptchaUrl(captchaUrl)
+        val response = executeBytes(
+            Request.Builder()
+                .url(url)
+                .header("User-Agent", userAgent)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Cookie", cookieHeader(url.toHttpUrl().host)),
+        )
+        if (response.code != 200) {
+            // Reference returns an empty solution here → login fails; ours is
+            // a typed failure with only the status (no bytes, no URL data).
+            throw MiLoginFailed("captcha image fetch failed (HTTP ${response.code})")
+        }
+        return response.body
+    }
+
     /** One encrypted API call (`execute_api_call_encrypted` of the reference). */
     private fun apiJson(
         auth: MiAuth,
@@ -675,6 +764,9 @@ class MiCloudClient(
 
     private class HttpResult(val code: Int, val body: String, val headers: Headers, val url: HttpUrl)
 
+    /** A response whose body is kept as raw bytes (the captcha image). */
+    private class BytesResult(val code: Int, val body: ByteArray)
+
     private fun execute(builder: Request.Builder, followRedirects: Boolean = true): HttpResult {
         val callClient = if (followRedirects) client else noRedirect
         callClient.newCall(builder.build()).execute().use { response ->
@@ -687,6 +779,19 @@ class MiCloudClient(
                 response.headers,
                 response.request.url,
             )
+        }
+    }
+
+    /**
+     * Like [execute], but keeps the body as raw bytes: `response.body.string()`
+     * would decode binary image data as UTF-8 and corrupt it. Cookie capture
+     * is identical.
+     */
+    private fun executeBytes(builder: Request.Builder, followRedirects: Boolean = true): BytesResult {
+        val callClient = if (followRedirects) client else noRedirect
+        callClient.newCall(builder.build()).execute().use { response ->
+            cookies.capture(response.request.url, response.headers)
+            return BytesResult(response.code, response.body.bytes())
         }
     }
 

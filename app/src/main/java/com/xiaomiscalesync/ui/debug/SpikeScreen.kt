@@ -6,11 +6,13 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,6 +46,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -430,9 +433,10 @@ class SpikeController(private val appContext: Context) {
     // ------------------------------------------------------------- buttons
 
     /**
-     * "Extract keys (Mi login)": sign in to the Mi Cloud (2FA dialog when
-     * Xiaomi asks), find the scale, validate + store MAC/TOKEN/BLE KEY.
-     * Passwords stay in the composable's memory; only keys are persisted.
+     * "Extract keys (Mi login)": sign in to the Mi Cloud (captcha dialog
+     * and 2FA dialog when Xiaomi asks), find the scale, validate + store
+     * MAC/TOKEN/BLE KEY. Passwords stay in the composable's memory; only
+     * keys are persisted.
      */
     fun extractKeys(username: String, password: String) = runOperation("extract") {
         if (username.isBlank() || password.isBlank()) {
@@ -440,7 +444,11 @@ class SpikeController(private val appContext: Context) {
             return@runOperation
         }
         log("signing in to the Mi Cloud as $username …")
-        val auth = miClient.login(username, password) { prompt -> miPrompt.ask(prompt) }
+        val auth = miClient.login(
+            username,
+            password,
+            onCaptcha = { image, url -> miPrompt.askCaptcha(image, url) },
+        ) { prompt -> miPrompt.ask(prompt) }
         log("Mi sign-in OK (userId ${auth.userId})")
         val device = miClient.extractScale(auth)
         if (device == null) {
@@ -687,28 +695,46 @@ class SpikeController(private val appContext: Context) {
 }
 
 /**
- * One suspendable second-factor prompt (Mi email 2FA / Garmin MFA): the
- * login call suspends in [ask] until the dialog submits or dismisses.
- * State is snapshot-backed so the dialog reacts instantly; the deferred
- * hand-off is safe across the login thread (OkHttp IO) and the main thread.
+ * One suspendable prompt for the login flows (Mi captcha / Mi email 2FA /
+ * Garmin MFA): the login call suspends in [ask] or [askCaptcha] until the
+ * dialog submits or dismisses. State is snapshot-backed so the dialog
+ * reacts instantly; the deferred hand-off is safe across the login thread
+ * (OkHttp IO) and the main thread.
  */
 class CodePrompt {
+    /** A captcha challenge handed to [askCaptcha]: raw image bytes + resolved URL. */
+    class Captcha(val image: ByteArray, val url: String)
+
     var prompt by mutableStateOf<String?>(null)
+        private set
+
+    var captcha by mutableStateOf<Captcha?>(null)
         private set
 
     @Volatile
     private var pending: CompletableDeferred<String?>? = null
 
     /** Suspends until the dialog answers; null = cancelled. */
-    suspend fun ask(text: String): String? {
+    suspend fun ask(text: String): String? = askWith { prompt = text }
+
+    /**
+     * [MiCloudClient.login]'s `onCaptcha` seam: shows [image] in a dialog
+     * and suspends until the typed code is submitted; null = cancelled or
+     * dismissed (→ [com.xiaomiscalesync.xiaomi.MiLoginBlocked]).
+     */
+    suspend fun askCaptcha(image: ByteArray, url: String): String? =
+        askWith { captcha = Captcha(image, url) }
+
+    private suspend fun askWith(open: () -> Unit): String? {
         check(pending == null) { "a code prompt is already open" }
         val deferred = CompletableDeferred<String?>()
         pending = deferred
-        prompt = text
+        open()
         return try {
             deferred.await()
         } finally {
             prompt = null
+            captcha = null
             pending = null
         }
     }
@@ -716,6 +742,7 @@ class CodePrompt {
     /** Called from the dialog (main thread). */
     fun submit(code: String?) {
         prompt = null
+        captcha = null
         val deferred = pending
         pending = null
         deferred?.complete(code)
@@ -889,6 +916,9 @@ fun SpikeScreen(controller: SpikeController) {
         prompt.prompt?.let { text ->
             CodeDialog(text) { code -> prompt.submit(code) }
         }
+        prompt.captcha?.let { challenge ->
+            CaptchaDialog(challenge.image) { code -> prompt.submit(code) }
+        }
     }
 }
 
@@ -955,6 +985,52 @@ private fun CodeDialog(promptText: String, onSubmit: (String?) -> Unit) {
                     onValueChange = { code = it },
                     singleLine = true,
                     label = { Text("Code") },
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSubmit(code) }) { Text("Submit") } },
+        dismissButton = { TextButton(onClick = { onSubmit(null) }) { Text("Cancel") } },
+    )
+}
+
+/**
+ * Captcha dialog (Mi login): the fetched image decoded to a bitmap, a text
+ * input, Submit/Cancel — dismiss = cancel, like [CodeDialog]. Debug quality;
+ * the suspend hand-off runs through [CodePrompt.askCaptcha].
+ */
+@Composable
+private fun CaptchaDialog(image: ByteArray, onSubmit: (String?) -> Unit) {
+    var code by remember { mutableStateOf("") }
+    val bitmap = remember(image) { BitmapFactory.decodeByteArray(image, 0, image.size) }
+    AlertDialog(
+        onDismissRequest = { onSubmit(null) },
+        title = { Text("Captcha required") },
+        text = {
+            Column {
+                Text(
+                    "Xiaomi wants a captcha — type the characters shown in the image.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.heightIn(min = 8.dp))
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "captcha image",
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp),
+                    )
+                } else {
+                    Text(
+                        "captcha image could not be decoded",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Spacer(Modifier.heightIn(min = 8.dp))
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it },
+                    singleLine = true,
+                    label = { Text("Captcha code") },
                 )
             }
         },
