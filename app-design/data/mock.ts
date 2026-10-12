@@ -74,12 +74,15 @@ export const weighIns: WeighIn[] = [
   {
     id: "w1",
     timestamp: daysAgo(6, 7, 30),
-    weightKg: 72.4,
+    weightKg: 72.5,
     deltaKg: null,
     excluded: true,
     source: "Unknown",
   },
 ];
+
+/** Current reading minus oldest reading — keeps trend values consistent. */
+export const weekDeltaKg = weighIns[0].weightKg - weighIns[weighIns.length - 1].weightKg;
 
 export const profile: UserProfile = {
   name: "Alex Morgan",
@@ -115,7 +118,7 @@ export function getHomeState(): HomeUiState {
   return {
     currentKg: weighIns[0].weightKg,
     synced: true,
-    weekDeltaKg: -0.1,
+    weekDeltaKg,
     recentWeighIns: weighIns.slice(0, 4),
   };
 }
@@ -126,7 +129,7 @@ export function getStatsState(): StatsUiState {
       currentKg: weighIns[0].weightKg,
       readingCount: weighIns.length,
       unknownCount: weighIns.filter((w) => w.excluded).length,
-      weekDeltaKg: -0.1,
+      weekDeltaKg,
     },
     weighIns,
   };

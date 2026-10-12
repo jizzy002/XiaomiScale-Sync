@@ -19,7 +19,7 @@ export function WeightGraph({ weighIns }: { weighIns: WeighIn[] }) {
   const excluded = points.filter((_, i) => chronological[i].excluded);
 
   return (
-    <div className="rounded-xl bg-white p-5 ring-1 ring-border-soft">
+    <div className="rounded-xl bg-surface-card p-5 ring-1 ring-border-soft">
       <div className="flex items-center justify-between">
         <h3 className="text-[14px] font-bold text-text-primary">
           Weight history
@@ -42,19 +42,19 @@ export function WeightGraph({ weighIns }: { weighIns: WeighIn[] }) {
             x2={BOX.width - BOX.padding}
             y1={BOX.padding + (BOX.height - BOX.padding * 2) * f}
             y2={BOX.padding + (BOX.height - BOX.padding * 2) * f}
-            stroke="#E5E7EB"
+            stroke="var(--border-soft)"
             strokeWidth={1}
             strokeDasharray="3 4"
           />
         ))}
 
-        <path d={linePath(included)} fill="none" stroke="#FF6B35" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+        <path d={linePath(included)} fill="none" stroke="var(--brand)" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
 
         {included.map((p, i) => (
-          <circle key={`m${i}`} cx={p.x} cy={p.y} r={4} fill="#FF6B35" stroke="#fff" strokeWidth={1.5} />
+          <circle key={`m${i}`} cx={p.x} cy={p.y} r={4} fill="var(--brand)" stroke="var(--surface-card)" strokeWidth={1.5} />
         ))}
         {excluded.map((p, i) => (
-          <circle key={`e${i}`} cx={p.x} cy={p.y} r={4} fill="#D1D5DB" stroke="#fff" strokeWidth={1.5} />
+          <circle key={`e${i}`} cx={p.x} cy={p.y} r={4} fill="var(--border-lighter)" stroke="var(--surface-card)" strokeWidth={1.5} />
         ))}
       </svg>
 

@@ -9,7 +9,7 @@ const icons: Record<string, React.ElementType> = {
 export function ConnectedAccountRow({ account }: { account: ConnectedAccount }) {
   const Icon = icons[account.id] ?? Smartphone;
   return (
-    <li className="flex items-center gap-3 rounded-md bg-white px-4 py-3 ring-1 ring-border-soft">
+    <li className="flex items-center gap-3 rounded-md bg-surface-card px-4 py-3 ring-1 ring-border-soft">
       <div className="flex h-10 w-10 items-center justify-center rounded-md bg-bg">
         <Icon className="h-5 w-5 text-text-muted" />
       </div>

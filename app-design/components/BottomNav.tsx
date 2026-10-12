@@ -15,7 +15,7 @@ export function BottomNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-white px-2 py-1.5 shadow-[0_8px_24px_rgba(17,24,39,0.12)] ring-1 ring-black/5">
+    <nav className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-surface-card px-2 py-1.5 shadow-[var(--elevation-nav)] ring-1 ring-hairline">
       {items.map(({ href, label, icon: Icon }) => {
         const active = pathname === href;
         return (

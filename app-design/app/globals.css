@@ -12,15 +12,20 @@
   --brand-dark: #e55a28;
   --surface-dark: #111827;
   --surface-darker: #1e1e1e;
+  --surface-card: #ffffff;
   --success: #10b981;
   --danger: #ef4444;
   --link: #3b82f6;
   --bg: #f9fafb;
+  --canvas: #e5e7eb;
   --border-soft: #e5e7eb;
   --border-lighter: #d1d5db;
   --text-primary: #111827;
   --text-muted: #6b7280;
   --text-faint: #9ca3af;
+  --text-on-dark: #ffffff;
+  --hairline: rgb(0 0 0 / 0.05);
+  --elevation-nav: 0 8px 24px rgb(17 24 39 / 0.12);
 }
 
 @theme inline {
@@ -28,15 +33,19 @@
   --color-brand-dark: var(--brand-dark);
   --color-surface-dark: var(--surface-dark);
   --color-surface-darker: var(--surface-darker);
+  --color-surface-card: var(--surface-card);
   --color-success: var(--success);
   --color-danger: var(--danger);
   --color-link: var(--link);
   --color-bg: var(--bg);
+  --color-canvas: var(--canvas);
   --color-border-soft: var(--border-soft);
   --color-border-lighter: var(--border-lighter);
   --color-text-primary: var(--text-primary);
   --color-text-muted: var(--text-muted);
   --color-text-faint: var(--text-faint);
+  --color-text-on-dark: var(--text-on-dark);
+  --color-hairline: var(--hairline);
 
   --radius-md: 16px;
   --radius-lg: 20px;
@@ -47,7 +56,7 @@
 }
 
 body {
-  background: #e5e7eb;
+  background: var(--canvas);
   color: var(--text-primary);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
