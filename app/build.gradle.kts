@@ -13,8 +13,9 @@ android {
         applicationId = "com.xiaomiscalesync"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        // Release CI passes these from the tag / run number; local builds keep the defaults.
+        versionCode = providers.gradleProperty("appVersionCode").orNull?.toInt() ?: 1
+        versionName = providers.gradleProperty("appVersionName").orNull ?: "0.1.0-dev"
     }
 
     compileOptions {
