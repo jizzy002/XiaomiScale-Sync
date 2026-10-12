@@ -7,12 +7,14 @@ import com.xiaomiscalesync.data.WeighInSource
 import com.xiaomiscalesync.sync.EnginePhase
 import com.xiaomiscalesync.sync.EngineState
 import com.xiaomiscalesync.sync.LiveReading
+import com.xiaomiscalesync.work.PushState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 
 /** The big line at the top of the weighing screen. */
 enum class Headline(val label: String) {
@@ -42,6 +44,18 @@ sealed class Banner {
     object NeedsReview : Banner()
 }
 
+/** Home's Garmin line: is everything of the owner's in Garmin? */
+sealed class GarminLine {
+    /** Nothing of the owner's is waiting. */
+    object Synced : GarminLine()
+
+    /** [count] waiting; [retrying] = the last pass failed and a backoff retry is scheduled. */
+    data class Waiting(val count: Int, val retrying: Boolean) : GarminLine()
+
+    /** A pass is uploading right now ([count] were waiting when it started). */
+    data class Pushing(val count: Int) : GarminLine()
+}
+
 /** The confirmation card for the newest capture. */
 data class LatestCard(
     val id: Long,
@@ -63,6 +77,8 @@ data class MainUiState(
     val banners: List<Banner> = emptyList(),
     /** The few captures before [latest], newest first (Home's short history). */
     val recent: List<LatestCard> = emptyList(),
+    /** Null until the owner has any weigh-in of their own. */
+    val garmin: GarminLine? = null,
 )
 
 /**
@@ -101,6 +117,7 @@ object MainUi {
         records: List<WeighInRecord>,
         listeningSinceMs: Long?,
         nowMs: Long,
+        push: PushState = PushState.IDLE,
     ): MainUiState {
         val headline = when {
             engine.phase == EnginePhase.Connecting -> Headline.SYNCING
@@ -124,7 +141,20 @@ object MainUi {
             live = engine.live,
             banners = banners,
             recent = sorted.drop(1).take(RECENT_COUNT).map { card(it, sorted) },
+            garmin = garminLine(records, push),
         )
+    }
+
+    /** Only the owner's rows count — guests and needs-review never go to Garmin. */
+    private fun garminLine(records: List<WeighInRecord>, push: PushState): GarminLine? {
+        val mine = records.filter { it.category == Category.MINE }
+        if (mine.isEmpty()) return null
+        val waiting = mine.count { it.garminStatus == GarminStatus.PENDING }
+        return when {
+            waiting == 0 -> GarminLine.Synced // incl. an app-open pass with nothing to send
+            push == PushState.RUNNING -> GarminLine.Pushing(waiting)
+            else -> GarminLine.Waiting(waiting, retrying = push == PushState.RETRY_SCHEDULED)
+        }
     }
 
     /** How many earlier captures Home lists under the latest one. */
@@ -157,6 +187,7 @@ object MainUi {
 class MainViewModel(
     engineState: Flow<EngineState>,
     records: Flow<List<WeighInRecord>>,
+    push: Flow<PushState> = flowOf(PushState.IDLE),
     private val nowMs: () -> Long = System::currentTimeMillis,
     tickMs: Long = 30_000L,
 ) {
@@ -170,8 +201,8 @@ class MainViewModel(
     }
 
     val uiState: Flow<MainUiState> =
-        combine(engineState, records, listeningSince, ticks) { engine, rows, since, _ ->
-            MainUi.reduce(engine, rows, since, nowMs())
+        combine(engineState, records, listeningSince, push, ticks) { engine, rows, since, pushState, _ ->
+            MainUi.reduce(engine, rows, since, nowMs(), pushState)
         }.distinctUntilChanged()
 
     /** The scan started (screen resumed): the silence window opens now. */

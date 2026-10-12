@@ -61,6 +61,7 @@ import com.xiaomiscalesync.ui.main.MainUi
 import com.xiaomiscalesync.ui.theme.AppIcons
 import com.xiaomiscalesync.ui.theme.Pill
 import com.xiaomiscalesync.ui.theme.tone
+import com.xiaomiscalesync.work.PushWorker
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -78,7 +79,10 @@ import kotlinx.coroutines.launch
 @Composable
 fun HistoryScreen() {
     val graph = AppGraph.of(LocalContext.current)
-    val viewModel = remember(graph) { HistoryViewModel(graph.repo) }
+    val appContext = LocalContext.current.applicationContext
+    val viewModel = remember(graph) {
+        HistoryViewModel(graph.repo, enqueuePush = { PushWorker.enqueue(appContext) })
+    }
     val ui by viewModel.uiState.collectAsState(initial = HistoryUiState())
     val scope = rememberCoroutineScope()
 

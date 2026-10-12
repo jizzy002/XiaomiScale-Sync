@@ -59,6 +59,7 @@ import com.xiaomiscalesync.ui.theme.Tone
 import com.xiaomiscalesync.ui.theme.container
 import com.xiaomiscalesync.ui.theme.content
 import com.xiaomiscalesync.ui.theme.tone
+import com.xiaomiscalesync.work.PushWorker
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -81,10 +82,15 @@ fun MainScreen(
     onOpenHistory: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
 ) {
-    val graph = AppGraph.of(LocalContext.current)
+    val appContext = LocalContext.current.applicationContext
+    val graph = AppGraph.of(appContext)
     val scanner = graph.scanner
     val viewModel = remember(graph) {
-        MainViewModel(graph.engine.state, graph.repo.observe(null))
+        MainViewModel(
+            graph.engine.state,
+            graph.repo.observe(null),
+            push = PushWorker.state(appContext),
+        )
     }
     val ui by viewModel.uiState.collectAsState(initial = MainUiState())
     val listening by scanner.listening.collectAsState()
@@ -149,6 +155,7 @@ fun MainScreen(
             ui.live?.let { LiveCard(it) }
             val latest = ui.latest
             if (latest != null) LatestWeighInCard(latest) else EmptyCard()
+            ui.garmin?.let { GarminCard(it, onPushNow = { PushWorker.pushNow(appContext) }) }
             if (ui.recent.isNotEmpty()) RecentSection(ui.recent, onSeeAll = onOpenHistory)
         }
     }
@@ -252,6 +259,43 @@ private fun LatestWeighInCard(latest: LatestCard) {
             )
             Spacer(Modifier.size(8.dp))
             Pill(latest.chip.label, latest.chip.tone())
+        }
+    }
+}
+
+/**
+ * Is everything of the owner's in Garmin? Offers "Push now" whenever
+ * something waits and no pass is uploading (never cancels a running pass).
+ */
+@Composable
+private fun GarminCard(line: GarminLine, onPushNow: () -> Unit) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when (line) {
+                            GarminLine.Synced -> "✓ All weigh-ins are in Garmin"
+                            is GarminLine.Pushing -> "Sending ${line.count} to Garmin…"
+                            is GarminLine.Waiting -> "${line.count} waiting for Garmin"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    if (line is GarminLine.Waiting && line.retrying) {
+                        Text(
+                            "Couldn't reach Garmin — retrying automatically",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (line is GarminLine.Waiting) {
+                    FilledTonalButton(onClick = onPushNow) { Text("Push now") }
+                }
+            }
+            if (line is GarminLine.Pushing) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+            }
         }
     }
 }

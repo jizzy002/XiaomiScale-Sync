@@ -47,6 +47,8 @@ data class HistoryUiState(
 class HistoryViewModel(
     private val repo: WeighInRepository,
     private val zone: ZoneId = ZoneId.systemDefault(),
+    /** Queues a Garmin push pass (production: `PushWorker.enqueue`). */
+    private val enqueuePush: () -> Unit = {},
 ) {
     private val filter = MutableStateFlow(HistoryFilter.ALL)
     private val selected = MutableStateFlow<Set<Long>>(emptySet())
@@ -89,8 +91,14 @@ class HistoryViewModel(
         selected.value = emptySet()
     }
 
-    /** Needs review → the owner's: MINE, status untouched (PENDING → pushable). */
-    suspend fun approve(id: Long) = repo.approve(id)
+    /**
+     * Needs review → the owner's: MINE, status untouched (PENDING), and a
+     * push is queued right away instead of waiting for the next sync.
+     */
+    suspend fun approve(id: Long) {
+        repo.approve(id)
+        enqueuePush()
+    }
 
     /** Needs review → a guest's: GUEST, archived only, never pushed. */
     suspend fun keepGuest(id: Long) = repo.keepGuest(id)

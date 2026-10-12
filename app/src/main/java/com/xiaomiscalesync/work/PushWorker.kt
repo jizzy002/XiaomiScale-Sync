@@ -6,12 +6,15 @@ import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ListenableWorker
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.garmin.GarminPusher
 import com.xiaomiscalesync.garmin.PushSummary
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
  * One-shot WorkManager shell around [GarminPusher]: drain the Garmin push
@@ -97,7 +100,51 @@ class PushWorker(
                 OneTimeWorkRequestBuilder<PushWorker>().build(),
             )
         }
+
+        /**
+         * The owner's "Push now" (Home): runs a pass immediately. REPLACE
+         * swaps out a pass that is only *waiting* (e.g. a backoff-delayed
+         * retry) — callers offer this only when [state] is not RUNNING, so it
+         * never cancels a pass mid-upload, and it stays on the same unique
+         * queue, so it can never run alongside another pass (two concurrent
+         * passes could both miss the duplicate guard and upload twice).
+         */
+        fun pushNow(context: Context) {
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                WORK_NAME,
+                ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<PushWorker>().build(),
+            )
+        }
+
+        /** The push queue's state for Home's Garmin line (a chain → the busiest member). */
+        fun state(context: Context): Flow<PushState> =
+            WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK_NAME).map { infos ->
+                infos.map { pushStateOf(it.state, it.runAttemptCount) }
+                    .maxByOrNull { it.priority } ?: PushState.IDLE
+            }
     }
+}
+
+/** What the Garmin push queue is doing, as Home shows it. */
+enum class PushState(internal val priority: Int) {
+    IDLE(0),
+
+    /** A pass failed (network / rate limit) and WorkManager will retry after a backoff. */
+    RETRY_SCHEDULED(1),
+
+    RUNNING(2),
+}
+
+/**
+ * One WorkInfo → [PushState]. ENQUEUED with no previous attempt is a fresh
+ * pass about to start (IDLE for display); with attempts it is a retry
+ * waiting out its backoff. Plain function so the mapping pins on the JVM.
+ */
+internal fun pushStateOf(state: WorkInfo.State?, runAttemptCount: Int): PushState = when {
+    state == WorkInfo.State.RUNNING -> PushState.RUNNING
+    state == WorkInfo.State.ENQUEUED && runAttemptCount > 0 -> PushState.RETRY_SCHEDULED
+    else -> PushState.IDLE
 }
 
 /**

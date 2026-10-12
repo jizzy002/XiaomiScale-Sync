@@ -9,6 +9,7 @@ import com.xiaomiscalesync.sync.EngineState
 import com.xiaomiscalesync.sync.LiveReading
 import com.xiaomiscalesync.sync.SyncKind
 import com.xiaomiscalesync.sync.SyncResult
+import com.xiaomiscalesync.work.PushState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -192,6 +193,40 @@ class MainViewModelTest {
         assertEquals("guest row in between is ignored", -80, s.latest!!.deltaGrams)
         assertNull("no delta for a row that is not the owner's", s.recent.first { it.id == 2L }.deltaGrams)
         assertNull("the owner's first weigh-in has nothing to compare", s.recent.first { it.id == 1L }.deltaGrams)
+    }
+
+    // ---------------------------------------------------- garmin push line
+
+    @Test
+    fun noGarminLineWithoutAnyOwnWeighIns() {
+        val guestOnly = listOf(record(id = 1, category = Category.NEEDS_REVIEW))
+        assertNull(MainUi.reduce(EngineState(), guestOnly, t0, t0).garmin)
+        assertNull(MainUi.reduce(EngineState(), emptyList(), t0, t0).garmin)
+    }
+
+    @Test
+    fun garminLineCountsOnlyTheOwnersQueuedWeighIns() {
+        val records = listOf(
+            record(id = 1, recordedAt = 100),
+            record(id = 2, recordedAt = 200),
+            record(id = 3, recordedAt = 300, category = Category.NEEDS_REVIEW), // never counted
+            record(id = 4, recordedAt = 400, status = GarminStatus.PUSHED),
+        )
+        fun line(push: PushState) = MainUi.reduce(EngineState(), records, t0, t0, push).garmin
+
+        assertEquals(GarminLine.Waiting(2, retrying = false), line(PushState.IDLE))
+        assertEquals(GarminLine.Waiting(2, retrying = true), line(PushState.RETRY_SCHEDULED))
+        assertEquals(GarminLine.Pushing(2), line(PushState.RUNNING))
+    }
+
+    @Test
+    fun garminLineIsSyncedWhenNothingOfTheOwnersIsQueued() {
+        val records = listOf(
+            record(id = 1, recordedAt = 100, status = GarminStatus.PUSHED),
+            record(id = 2, recordedAt = 200, status = GarminStatus.SKIPPED_EXISTING),
+            record(id = 3, recordedAt = 300, category = Category.NEEDS_REVIEW),
+        )
+        assertEquals(GarminLine.Synced, MainUi.reduce(EngineState(), records, t0, t0).garmin)
     }
 
     @Test

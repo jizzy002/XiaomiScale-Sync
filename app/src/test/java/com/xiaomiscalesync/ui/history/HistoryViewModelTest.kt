@@ -28,6 +28,9 @@ class HistoryViewModelTest {
 
     private val day = 1_790_000_000L // 2026-09-21 14:13:20 UTC
 
+    /** Push requests the view model made (approve → one push). */
+    private var pushes = 0
+
     private fun harness(): Triple<HistoryViewModel, WeighInRepository, FakeDao> {
         val dao = FakeDao()
         val repo = WeighInRepository(
@@ -35,7 +38,7 @@ class HistoryViewModelTest {
             SettingsSource { Settings(onboarded = true, backfillCutoff = null, mid = "1") },
             nowUnix = { day + 86_400 * 30 },
         )
-        return Triple(HistoryViewModel(repo, zone = ZoneOffset.UTC), repo, dao)
+        return Triple(HistoryViewModel(repo, zone = ZoneOffset.UTC, enqueuePush = { pushes++ }), repo, dao)
     }
 
     private fun mine(weight: Int, at: Long, recordNo: Long? = null) =
@@ -63,6 +66,7 @@ class HistoryViewModelTest {
         assertEquals(Category.MINE, row.category)
         assertEquals(GarminStatus.PENDING, row.garminStatus)
         assertEquals(listOf(id), repo.pending().map { it.id })
+        assertEquals("approval pushes right away, not at the next sync", 1, pushes)
     }
 
     @Test
@@ -75,6 +79,7 @@ class HistoryViewModelTest {
 
         assertEquals(Category.GUEST, dao.rows.value.single().category)
         assertTrue(repo.pending().isEmpty())
+        assertEquals("a guest's weigh-in never triggers a push", 0, pushes)
     }
 
     // -------------------------------------------------------------- delete

@@ -1,6 +1,7 @@
 package com.xiaomiscalesync.work
 
 import androidx.work.ListenableWorker
+import androidx.work.WorkInfo
 import com.xiaomiscalesync.garmin.PushSummary
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -90,6 +91,19 @@ class PushWorkerTest {
     fun cancellationIsRethrownNotSwallowed() = runBlocking<Unit> {
         // A stopped/cancelled worker is neither a failure nor an incident.
         runGarminPush({ throw CancellationException("worker stopped") }) { unreachable() }
+    }
+
+    // ---------- push state for Home's Garmin line ----------
+
+    @Test
+    fun pushStateMapsWorkStates() {
+        assertEquals(PushState.RUNNING, pushStateOf(WorkInfo.State.RUNNING, 0))
+        assertEquals(PushState.IDLE, pushStateOf(WorkInfo.State.ENQUEUED, 0)) // first run, about to start
+        assertEquals(PushState.RETRY_SCHEDULED, pushStateOf(WorkInfo.State.ENQUEUED, 1))
+        assertEquals(PushState.RETRY_SCHEDULED, pushStateOf(WorkInfo.State.ENQUEUED, 4))
+        assertEquals(PushState.IDLE, pushStateOf(WorkInfo.State.SUCCEEDED, 2))
+        assertEquals(PushState.IDLE, pushStateOf(WorkInfo.State.FAILED, 1))
+        assertEquals(PushState.IDLE, pushStateOf(null, 0))
     }
 
     // ---------- app-open push (plan Task 17) ----------
