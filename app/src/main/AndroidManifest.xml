@@ -1,5 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Mi cloud + Garmin Connect HTTP (OkHttp). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- API 31+: modern Bluetooth. neverForLocation — the scan never derives
+         location, so no location permission is requested on these devices. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Legacy (API 30 and below): scanning needs the old Bluetooth
+         permissions plus fine location at runtime; connect uses BLUETOOTH. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+
+    <!-- BLE is the product; no foreground service type is declared (the app
+         scans only while open — design spec, non-goals). -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="true" />
 
     <application
         android:label="Xiaomi Scale Sync">
