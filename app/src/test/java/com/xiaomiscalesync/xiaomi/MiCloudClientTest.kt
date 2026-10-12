@@ -1,5 +1,6 @@
 package com.xiaomiscalesync.xiaomi
 
+import java.io.IOException
 import java.security.MessageDigest
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
@@ -41,8 +42,9 @@ class MiCloudClientTest {
     private fun client(
         regions: List<String> = listOf("de"),
         preferredRegion: String? = null,
+        http: OkHttpClient = OkHttpClient(),
     ) = MiCloudClient(
-        http = OkHttpClient(),
+        http = http,
         accountBaseUrl = fake.accountBase,
         apiBaseUrl = { region -> fake.apiBase(region) },
         regions = regions,
@@ -510,4 +512,118 @@ class MiCloudClientTest {
         fake.deviceList["de"] = """{"code":0,"result":{"device_info":[]}}"""
         assertNull(client().extractScale(auth))
     }
+
+    // --------------------------------- controller ruling: 4xx aborts, 5xx falls through
+
+    /**
+     * A 5xx is that region's problem, not the session's: the walk must go on
+     * to the next region and may well succeed there.
+     */
+    @Test
+    fun serverFailureInOneRegionFallsThroughToTheNext() = runBlocking<Unit> {
+        fake.apiStatus["de"] = 500
+        fake.gethome["cn"] =
+            """{"code":0,"result":{"homelist":[{"id":700000001,"name":"Home"}]}}"""
+        fake.deviceList["cn"] = """{"code":0,"result":{"device_info":[${scaleJson(scaleToken)}]}}"""
+
+        val scale = client(regions = listOf("de", "cn")).extractScale(auth)
+
+        assertNotNull(scale)
+        assertEquals(scaleToken, scale!!.tokenHex)
+        assertEquals(
+            listOf(
+                "/regions/de/app/v2/homeroom/gethome",
+                "/regions/cn/app/v2/homeroom/gethome",
+            ),
+            gethomeAttempts(),
+        )
+    }
+
+    /**
+     * A 4xx means the session itself was refused — the same serviceToken
+     * goes to every region, so retrying elsewhere is pointless: the typed
+     * error surfaces immediately, before the second region is contacted.
+     */
+    @Test
+    fun rejectedSessionAbortsBeforeTryingTheNextRegion() {
+        fake.apiStatus["de"] = 401
+        val error = assertThrows(MiApiError::class.java) {
+            runBlocking { client(regions = listOf("de", "cn")).extractScale(auth) }
+        }
+        assertEquals(401, error.code)
+        assertEquals("de", error.region)
+        assertTrue(
+            "the rejected session must not be retried in cn",
+            fake.requests.none { it.requestUrl?.encodedPath?.startsWith("/regions/cn/") == true },
+        )
+    }
+
+    /**
+     * Every region failing still throws the typed error — reporting the
+     * **last** region attempted (documented choice: one typed value whose
+     * `code`/`region` say where the walk ended; the earlier failures are of
+     * the same kind).
+     */
+    @Test
+    fun everyRegionFailingThrowsTheTypedErrorFromTheLastRegion() {
+        fake.apiStatus["de"] = 500
+        fake.apiStatus["cn"] = 500
+        val error = assertThrows(MiApiError::class.java) {
+            runBlocking { client(regions = listOf("de", "cn")).extractScale(auth) }
+        }
+        assertEquals(500, error.code)
+        assertEquals("cn", error.region)
+        assertEquals(
+            listOf(
+                "/regions/de/app/v2/homeroom/gethome",
+                "/regions/cn/app/v2/homeroom/gethome",
+            ),
+            gethomeAttempts(),
+        )
+    }
+
+    /**
+     * Network-level failure (connect/DNS — an `IOException`) is
+     * distinguishable, so it is treated like a 5xx: the next region is
+     * tried, and the scale is still found there.
+     */
+    @Test
+    fun unreachableRegionFallsThroughToTheNextOne() = runBlocking<Unit> {
+        val offlineForDe = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                if (chain.request().url.encodedPath.startsWith("/regions/de/")) {
+                    throw IOException("simulated network failure")
+                }
+                chain.proceed(chain.request())
+            }
+            .build()
+        fake.gethome["cn"] =
+            """{"code":0,"result":{"homelist":[{"id":700000001,"name":"Home"}]}}"""
+        fake.deviceList["cn"] = """{"code":0,"result":{"device_info":[${scaleJson(scaleToken)}]}}"""
+
+        val scale = client(regions = listOf("de", "cn"), http = offlineForDe).extractScale(auth)
+
+        assertNotNull(scale)
+        assertEquals(scaleToken, scale!!.tokenHex)
+    }
+
+    /**
+     * …and if *no* region is reachable, the walk ends in the typed network
+     * error rather than in a raw `IOException` or an "empty inventory".
+     */
+    @Test
+    fun everyRegionUnreachableThrowsTheTypedNetworkError() {
+        val offline = OkHttpClient.Builder()
+            .addInterceptor { chain -> throw IOException("simulated network failure") }
+            .build()
+        val error = assertThrows(MiNetworkError::class.java) {
+            runBlocking { client(regions = listOf("de", "cn"), http = offline).extractScale(auth) }
+        }
+        assertEquals("cn", error.region)
+        assertEquals("/v2/homeroom/gethome", error.path)
+    }
+
+    private fun gethomeAttempts(): List<String> = fake.requests
+        .mapNotNull { it.requestUrl?.encodedPath }
+        .filter { it.endsWith("/v2/homeroom/gethome") }
 }

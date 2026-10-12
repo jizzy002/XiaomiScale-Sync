@@ -3,6 +3,7 @@ package com.xiaomiscalesync.xiaomi
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import java.io.IOException
 import java.net.URLEncoder
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
@@ -82,10 +83,20 @@ class MiFieldError(val field: String, val did: String, reason: String) :
  * found" and "the session was refused" must never look alike upstream.
  *
  * [region] and [path] identify the call; no URL, signature or token is
- * part of the message.
+ * part of the message. The region walk in [MiCloudClient.extractScale]
+ * aborts on 4xx and falls through to the next region on 5xx.
  */
 class MiApiError(val code: Int, val region: String, val path: String) :
     MiCloudException("Xiaomi cloud API $region$path failed (HTTP $code)")
+
+/**
+ * A signed API call never reached the cloud at all (DNS, connect, timeout…) —
+ * distinguished from [MiApiError] so the region walk can try the next region,
+ * another regional endpoint may still answer. Carries the same `region`/`path`
+ * identification, plus the transport failure as its cause.
+ */
+class MiNetworkError(val region: String, val path: String, cause: IOException) :
+    MiCloudException("Xiaomi cloud API $region$path is unreachable", cause)
 
 /**
  * Xiaomi cloud client: Mi Account sign-in (with the email-2FA branch) and
@@ -477,65 +488,86 @@ class MiCloudClient(
      * [MiFieldError] when a scale exists but a required field is missing or
      * malformed (token, did, or a non-32-hex beacon key). A missing
      * beacon-key result is not an error: `bleKeyHex` is simply null, which
-     * the sync layer degrades for (broadcast decryption unavailable). Throws
-     * [MiApiError] when any signed call answers non-200 — a rejected session
-     * or a server failure is never mistaken for an empty inventory.
+     * the sync layer degrades for (broadcast decryption unavailable).
+     *
+     * Failure policy per region (a rejected session is never mistaken for an
+     * empty inventory): a **4xx** ([MiApiError], e.g. an expired
+     * serviceToken) aborts the walk immediately — the same credentials go to
+     * every region, so another region cannot heal it; a **5xx** ([MiApiError])
+     * or an unreachable endpoint ([MiNetworkError]) falls through to the next
+     * region. If every region failed, the **last** region's typed error is
+     * thrown (single typed value; `code`/`region` say where the walk ended).
+     * If no region failed but a scale was seen with a bad field,
+     * [MiFieldError] wins — it is the more actionable cause. Precedence:
+     * 4xx > [MiFieldError] > 5xx/[MiNetworkError] > null.
      */
     suspend fun extractScale(auth: MiAuth): ScaleDevice? = withContext(Dispatchers.IO) {
         val order = (listOfNotNull(preferredRegion) + regions).distinct()
         var fieldError: MiFieldError? = null
+        var regionFailure: MiCloudException? = null
 
         for (region in order) {
-            val homes = apiJson(auth, region, "/v2/homeroom/gethome", linkedMapOf("data" to HOMES_DATA))
-            val counts = apiJson(auth, region, "/v2/user/get_device_cnt", linkedMapOf("data" to DEVICE_COUNT_DATA))
+            try {
+                val homes = apiJson(auth, region, "/v2/homeroom/gethome", linkedMapOf("data" to HOMES_DATA))
+                val counts = apiJson(auth, region, "/v2/user/get_device_cnt", linkedMapOf("data" to DEVICE_COUNT_DATA))
 
-            // Own homes (owner = our userId) plus shared-family homes.
-            val homeIds = ArrayList<Pair<String, String>>()
-            homes?.resultArray("homelist")?.forEach { element ->
-                val id = element.asJsonObject.string("id") ?: return@forEach
-                homeIds += id to auth.userId
-            }
-            counts?.nestedObject("result", "share")?.resultArray("share_family")?.forEach { element ->
-                val obj = element.asJsonObject
-                val id = obj.string("home_id") ?: return@forEach
-                val owner = obj.string("home_owner") ?: return@forEach
-                homeIds += id to owner
-            }
+                // Own homes (owner = our userId) plus shared-family homes.
+                val homeIds = ArrayList<Pair<String, String>>()
+                homes?.resultArray("homelist")?.forEach { element ->
+                    val id = element.asJsonObject.string("id") ?: return@forEach
+                    homeIds += id to auth.userId
+                }
+                counts?.nestedObject("result", "share")?.resultArray("share_family")?.forEach { element ->
+                    val obj = element.asJsonObject
+                    val id = obj.string("home_id") ?: return@forEach
+                    val owner = obj.string("home_owner") ?: return@forEach
+                    homeIds += id to owner
+                }
 
-            for ((homeId, owner) in homeIds) {
-                val list = apiJson(
-                    auth, region, "/v2/home/home_device_list",
-                    linkedMapOf("data" to deviceListData(owner, homeId)),
-                )
-                val devices = list?.resultArray("device_info") ?: continue
-                for (element in devices) {
-                    val device = element.asJsonObject
-                    val model = device.string("model") ?: continue
-                    if (!isScaleModel(model)) continue
-                    val did = device.string("did")
-                    val token = device.string("token")
-                    when {
-                        did == null ->
-                            fieldError = fieldError ?: MiFieldError(
-                                "did", "", "scale '$model' has no did in the device list",
+                for ((homeId, owner) in homeIds) {
+                    val list = apiJson(
+                        auth, region, "/v2/home/home_device_list",
+                        linkedMapOf("data" to deviceListData(owner, homeId)),
+                    )
+                    val devices = list?.resultArray("device_info") ?: continue
+                    for (element in devices) {
+                        val device = element.asJsonObject
+                        val model = device.string("model") ?: continue
+                        if (!isScaleModel(model)) continue
+                        val did = device.string("did")
+                        val token = device.string("token")
+                        when {
+                            did == null ->
+                                fieldError = fieldError ?: MiFieldError(
+                                    "did", "", "scale '$model' has no did in the device list",
+                                )
+                            token == null || !isHex(token, 24) ->
+                                fieldError = fieldError ?: MiFieldError(
+                                    "token", did, "scale $did has no valid 24-hex token",
+                                )
+                            else -> return@withContext ScaleDevice(
+                                name = device.string("name") ?: "",
+                                mac = device.string("mac") ?: "",
+                                did = did,
+                                model = model,
+                                tokenHex = token,
+                                bleKeyHex = fetchBleKey(auth, region, did),
                             )
-                        token == null || !isHex(token, 24) ->
-                            fieldError = fieldError ?: MiFieldError(
-                                "token", did, "scale $did has no valid 24-hex token",
-                            )
-                        else -> return@withContext ScaleDevice(
-                            name = device.string("name") ?: "",
-                            mac = device.string("mac") ?: "",
-                            did = did,
-                            model = model,
-                            tokenHex = token,
-                            bleKeyHex = fetchBleKey(auth, region, did),
-                        )
+                        }
                     }
                 }
+            } catch (e: MiApiError) {
+                if (e.code in 400..499) throw e // session refused: no region can heal it
+                regionFailure = e // 5xx: unhealthy region, try the next one
+            } catch (e: MiNetworkError) {
+                regionFailure = e // unreachable endpoint: try the next one
             }
         }
+        // Precedence at the end of the walk: a scale we actually saw (bad
+        // field) beats another region's server failure; a typed failure beats
+        // "the account has no scale".
         fieldError?.let { throw it }
+        regionFailure?.let { throw it }
         null
     }
 
@@ -578,17 +610,22 @@ class MiCloudClient(
             canonical, "POST", signedNonce, nonce, params, auth.ssecurity, millis,
         )
         val target = apiBaseUrl(region) + path + "?" + encodeQuery(fields)
-        val response = execute(
-            Request.Builder()
-                .url(target)
-                .post(EMPTY_BODY)
-                .header("Accept-Encoding", "identity")
-                .header("User-Agent", userAgent)
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .header("x-xiaomi-protocal-flag-cli", "PROTOCAL-HTTP2")
-                .header("MIOT-ENCRYPT-ALGORITHM", "ENCRYPT-RC4")
-                .header("Cookie", apiCookieHeader(auth, target.toHttpUrl().host)),
-        )
+        val response = try {
+            execute(
+                Request.Builder()
+                    .url(target)
+                    .post(EMPTY_BODY)
+                    .header("Accept-Encoding", "identity")
+                    .header("User-Agent", userAgent)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .header("x-xiaomi-protocal-flag-cli", "PROTOCAL-HTTP2")
+                    .header("MIOT-ENCRYPT-ALGORITHM", "ENCRYPT-RC4")
+                    .header("Cookie", apiCookieHeader(auth, target.toHttpUrl().host)),
+            )
+        } catch (e: IOException) {
+            // Transport failure — typed so the region walk can fall through.
+            throw MiNetworkError(region, path, e)
+        }
         if (response.code != 200) throw MiApiError(response.code, region, path)
         val decrypted = try {
             MiSigner.decryptResponse(signedNonce, response.body)
