@@ -62,7 +62,11 @@ import java.time.Clock
 class SyncEngine(
     private val repo: WeighInRepository,
     private val openSession: suspend () -> ScaleSession?,
-    private val profile: Profile = Profile(),
+    /**
+     * The profile pushed with action 7.1, read fresh per session so a
+     * Settings edit or a new weigh-in lands on the very next connection.
+     */
+    private val profile: suspend () -> Profile = { Profile() },
     private val config: EngineConfig = EngineConfig(),
     private val clock: Clock = Clock.systemUTC(),
     private val log: (String) -> Unit = {},
@@ -306,12 +310,16 @@ class SyncEngine(
 
         // First event: short window (the scale pushes 5.3 as weight lands).
         var msg = liveReceive(session, config.liveStartMs)
+        try {
         while (msg != null) {
             val finished = msg.iid == IID_LIVE_FINISHED
             when (msg.iid) {
                 IID_LIVE_WEIGHT -> {
                     val stable = (msg.params[2] as? Int) == 1
                     val weight = msg.params[3] as? Int
+                    if (weight != null && weight in MIN_WEIGHT100..MAX_WEIGHT100) {
+                        _state.update { it.copy(live = LiveReading(weight, stable)) }
+                    }
                     if (stable && weight != null && weight in MIN_WEIGHT100..MAX_WEIGHT100) {
                         lastStable = NewWeighIn(
                             weightGrams = weight,
@@ -336,6 +344,10 @@ class SyncEngine(
             if (finished) break
             if (System.nanoTime() - startedAt > config.liveMaxMs * NANOS_PER_MS) break
             msg = liveReceive(session, config.liveIdleMs)
+        }
+        } finally {
+            // The reading is only meaningful while someone is on the scale.
+            _state.update { it.copy(live = null) }
         }
 
         val record = commit ?: lastStable ?: return
@@ -462,14 +474,17 @@ class SyncEngine(
         return (config.backoffBaseMs shl shift).coerceAtMost(config.backoffMaxMs)
     }
 
-    private fun profileJson(): String = ProfileJson.build(
-        mid = profile.mid,
-        age = profile.age,
-        sex = profile.sex,
-        heightCm = profile.heightCm,
-        weightGrams = profile.weightGrams,
-        nowUnix = clock.instant().epochSecond,
-    )
+    private suspend fun profileJson(): String {
+        val p = profile()
+        return ProfileJson.build(
+            mid = p.mid,
+            age = p.age,
+            sex = p.sex,
+            heightCm = p.heightCm,
+            weightGrams = p.weightGrams,
+            nowUnix = clock.instant().epochSecond,
+        )
+    }
 
     /** Implausible timestamp (scale clock unset / absurd) → receive time. */
     private fun saneTs(ts: Long, receiveUnix: Long): Long =
@@ -564,4 +579,9 @@ data class EngineState(
     val lastHeardAt: Long? = null,
     /** The most recent sync's outcome, if any sync has run. */
     val lastResult: SyncResult? = null,
+    /** The 5.3 reading while someone stands on the scale; null otherwise. */
+    val live: LiveReading? = null,
 )
+
+/** One live 5.3 weight (1/100 kg) and whether the scale marked it stable. */
+data class LiveReading(val weightGrams: Int, val stable: Boolean)

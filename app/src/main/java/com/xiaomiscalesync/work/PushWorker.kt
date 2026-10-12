@@ -8,6 +8,7 @@ import androidx.work.ListenableWorker
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.garmin.GarminPusher
 import com.xiaomiscalesync.garmin.PushSummary
 import kotlin.coroutines.cancellation.CancellationException
@@ -59,23 +60,13 @@ class PushWorker(
         const val WORK_NAME = "garmin-push"
 
         /**
-         * Builds the pusher for a run. Default `null` ("not wired yet" → this
-         * worker is a no-op success) because the production [GarminPusher]
-         * needs a token store and sign-in wiring that land with the auth
-         * settings task. That wiring installs the real factory once:
-         *
-         * ```
-         * PushWorker.pusherFactory = { ctx ->
-         *     GarminPusher(
-         *         repo = WeighInRepository(ArchiveDb.build(ctx).archiveDao(), SettingsStore.of(ctx)),
-         *         garmin = GarminClient(OkHttpClient(), tokenStore, mfa = { "" }), // no-op prompt: only interactive sign-in asks for MFA
-         *         clock = Clock.systemDefaultZone(),
-         *     )
-         * }
-         * ```
+         * Builds the pusher for a run: the process-wide [AppGraph] pusher
+         * (Keystore token store, non-interactive MFA). Resolved per run, so
+         * a worker that starts a cold process still finds the real wiring.
+         * Replaceable for tests; a `null` result makes the run a no-op success.
          */
         @Volatile
-        var pusherFactory: (Context) -> GarminPusher? = { null }
+        var pusherFactory: (Context) -> GarminPusher? = { AppGraph.of(it).pusher }
 
         /**
          * Idempotent enqueue under the shared [WORK_NAME], policy

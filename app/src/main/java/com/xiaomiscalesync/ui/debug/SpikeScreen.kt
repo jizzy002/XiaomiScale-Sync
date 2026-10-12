@@ -1,13 +1,7 @@
 package com.xiaomiscalesync.ui.debug
 
-import android.Manifest
-import android.bluetooth.BluetoothManager
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.graphics.BitmapFactory
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -57,7 +51,8 @@ import com.xiaomiscalesync.ble.AndroidTransport
 import com.xiaomiscalesync.ble.Beacon
 import com.xiaomiscalesync.ble.BeaconDecoder
 import com.xiaomiscalesync.ble.BroadcastWeighIn
-import com.xiaomiscalesync.ble.WeighInObjects
+import com.xiaomiscalesync.ble.ScaleKeys
+import com.xiaomiscalesync.ble.ScaleScanner
 import com.xiaomiscalesync.data.ArchiveDb
 import com.xiaomiscalesync.data.Category
 import com.xiaomiscalesync.data.GarminStatus
@@ -83,31 +78,24 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
-import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
-import android.content.pm.PackageManager
-import android.os.ParcelUuid
 
 /**
  * Milestone-0 debug controller: the wiring the owner's acceptance checklist
  * (`docs/testing/milestone-0.md`) drives. Deliberately thin glue over the
  * tested cores — [MiCloudClient] → [SpikeKeyHolder], scan → [BeaconDecoder]
  * → [SyncEngine] → [AndroidTransport] → [ScaleSession],
- * [GarminPusher] (+ [PushWorker.pusherFactory] install) — with one scrolling
+ * [GarminPusher] (driven directly, never via [PushWorker]) — with one scrolling
  * log pane. Debug quality throughout: one instance per screen, no
  * ViewModel (rotation restarts an in-flight operation — acceptable for a
  * harness the owner runs deliberately), plain-prefs secrets (Task 14
@@ -205,7 +193,7 @@ class SpikeController(private val appContext: Context) {
         },
     )
 
-    /** The pusher the button drives and [PushWorker] reuses via the factory. */
+    /** The pusher the "Push pending" button drives (spike token store). */
     val pusher = GarminPusher(repo, garminClient, Clock.systemDefaultZone())
 
     /**
@@ -228,7 +216,9 @@ class SpikeController(private val appContext: Context) {
         private set
 
     init {
-        PushWorker.pusherFactory = { pusher }
+        // No PushWorker.pusherFactory install here any more: the worker
+        // resolves the production AppGraph pusher, and the spike's own
+        // plain-prefs token store must never replace it.
         refreshKeyStatus()
         scope.launch {
             // The owner's onboarding answer is already known (spec): history
@@ -249,24 +239,25 @@ class SpikeController(private val appContext: Context) {
         scope.cancel()
     }
 
-    // ---------------------------------------------------------- permissions
+    // -------------------------------------------------------------- scanning
 
     /**
-     * The permission set the scan/connect path needs: API 31+ modern
-     * `BLUETOOTH_SCAN` (neverForLocation — no location permission) +
-     * `BLUETOOTH_CONNECT`; below 31 the legacy scan needs fine location
-     * (the old Bluetooth permissions are install-time, never requested).
+     * The shared foreground scanner — the exact scan → [BeaconDecoder] →
+     * [SyncEngine.onBeacon] path the main screen runs, fed from the
+     * spike's own key holder and log pane.
      */
-    fun requiredPermissions(): Array<String> =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+    private val scanner = ScaleScanner(
+        appContext,
+        scope,
+        keys = { keys.mac?.let { ScaleKeys(it, keys.tokenHex, keys.bleKeyHex) } },
+        log = ::log,
+        onBeacon = { beacon, weighIn -> handleBeacon(beacon, weighIn) },
+    )
 
-    fun missingPermissions(): List<String> = requiredPermissions().filter {
-        appContext.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
-    }
+    /** True while the scan runs (drives the listen toggle). */
+    val listening: StateFlow<Boolean> = scanner.listening
+
+    fun missingPermissions(): List<String> = scanner.missingPermissions()
 
     fun onPermissionsResult(results: Map<String, Boolean>) {
         val denied = results.filterValues { !it }.keys
@@ -278,131 +269,15 @@ class SpikeController(private val appContext: Context) {
         }
     }
 
-    // -------------------------------------------------------------- scanning
-
-    @Volatile
-    private var lastSeenMs = 0L
-
-    private var scanner: android.bluetooth.le.BluetoothLeScanner? = null
-    private var scanCallback: ScanCallback? = null
-
-    var listening by mutableStateOf(false)
-        private set
-
-    var scaleVisible by mutableStateOf(false)
-        private set
-
     fun toggleListening() {
-        if (listening) stopListening() else startListening()
+        if (listening.value) stopListening() else startListening()
     }
 
-    /**
-     * Starts a foreground scan filtered on service `0xfe95`. Every result
-     * updates the freshness clock [openSession] gates connects on; decoded
-     * beacons feed [SyncEngine.onBeacon] exactly like Task 15's scanner
-     * will (including the caller obligation to run `syncNow()` when a
-     * trigger was armed — see [handleBeacon]).
-     */
     fun startListening() {
-        if (listening) return
-        val adapter = adapterOrNull() ?: run {
-            log("no Bluetooth adapter — cannot scan")
-            return
-        }
-        val missing = missingPermissions()
-        if (missing.isNotEmpty()) {
-            log("scan permission missing (${missing.joinToString()}) — grant it first")
-            return
-        }
-        val bleScanner = try {
-            adapter.bluetoothLeScanner
-        } catch (e: SecurityException) {
-            log("scan denied: ${e.message}")
-            return
-        } ?: run {
-            log("Bluetooth is off — turn it on, then tap Listen again")
-            return
-        }
-        val callback = buildScanCallback()
-        try {
-            // Deliberately unfiltered: SDK 37 offers no presence-only
-            // service-data ScanFilter (`setServiceUuid` matches the Service-
-            // UUID *list* AD type, which the scale may not carry, and
-            // `setServiceDataUuid` is gone from the SDK). Filtering for
-            // 0xfe95 service data in [buildScanCallback] instead means a
-            // filter quirk can never drop every scale packet.
-            bleScanner.startScan(emptyList(), SCAN_SETTINGS, callback)
-        } catch (e: SecurityException) {
-            log("scan denied: ${e.message}")
-            return
-        } catch (e: IllegalStateException) {
-            log("scan failed: ${e.message}")
-            return
-        }
-        scanner = bleScanner
-        scanCallback = callback
-        listening = true
-        log("listening for scale advertisements (service 0xfe95)")
+        scanner.startListening()
     }
 
-    fun stopListening() {
-        if (!listening) return
-        try {
-            scanner?.stopScan(scanCallback)
-        } catch (_: SecurityException) {
-            // Permission revoked mid-scan: the scanner dies with the app anyway.
-        } catch (_: IllegalStateException) {
-            // Bluetooth turned off underneath us.
-        }
-        scanner = null
-        scanCallback = null
-        listening = false
-        scaleVisible = false
-        log("scan stopped")
-    }
-
-    private fun buildScanCallback() = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            // Presence match, in code: only 0xfe95 *service data* frames (AD
-            // type 0x16) are the scale — the same bytes BeaconDecoder reads.
-            // SDK 37 exposes service data through the scan record only
-            // (ScanResult.getServiceData was dropped from the public API).
-            val serviceData = result.scanRecord?.getServiceData(SERVICE_PARCEL) ?: return
-            val address = result.device?.address ?: return
-            val mac = keys.mac
-            if (mac != null && !address.equals(mac, ignoreCase = true)) return
-
-            val now = System.currentTimeMillis()
-            val gap = lastSeenMs == 0L || now - lastSeenMs > VISIBLE_LOG_GAP_MS
-            lastSeenMs = now
-            if (gap) {
-                scaleVisible = true
-                log("scale visible: ${maskMac(address)} (rssi ${result.rssi})")
-            }
-            if (mac == null) return // keys not extracted yet: visibility only
-
-            val bleKey = keys.bleKeyHex?.let(::hexToBytes)
-            val beacon = try {
-                BeaconDecoder.decode(serviceData, mac, bleKey)
-            } catch (e: IllegalArgumentException) {
-                // Task 7 note: a malformed stored MAC throws here — surfaced,
-                // not swallowed, and sanitized (the message may embed it).
-                log("beacon decode failed: ${sanitize(e.message)}")
-                return
-            } ?: return
-            val weighIn = beacon.objects
-                .firstOrNull { it.first == WeighInObjects.OBJ_WEIGH_IN }
-                ?.let { WeighInObjects.parse(it.second) }
-            scope.launch { handleBeacon(beacon, weighIn) }
-        }
-
-        override fun onScanFailed(errorCode: Int) {
-            log("scan failed (errorCode $errorCode)")
-            listening = false
-            scanner = null
-            scanCallback = null
-        }
-    }
+    fun stopListening() = scanner.stopListening()
 
     /**
      * Feeds one advertisement to the engine. When the beacon was *handled*
@@ -481,7 +356,7 @@ class SpikeController(private val appContext: Context) {
             log("permissions missing (${missingPermissions().joinToString()}) — grant them first")
             return@runOperation
         }
-        if (!listening) startListening()
+        if (!listening.value) startListening()
         when (val result = engine.syncNow(force = true)) {
             null -> log("sync skipped — another sync is running")
             else -> log(syncLine(result))
@@ -527,65 +402,13 @@ class SpikeController(private val appContext: Context) {
 
     // ---------------------------------------------------------- internals
 
-    /**
-     * The [SyncEngine] session factory: keys present → wait for a *fresh*
-     * advertisement → connect [AndroidTransport] → hand [ScaleSession] over
-     * for the engine to drive (setup order, login, fetch, live listen).
-     * Returns null (engine sees SCALE_ABSENT) instead of ever attempting a
-     * connection to a scale that is not awake.
-     */
+    /** Keys gate first (spike wording), then the shared scanner's session factory. */
     private suspend fun openSession(): ScaleSession? {
-        val mac = keys.mac
-        val tokenHex = keys.tokenHex
-        if (mac == null || tokenHex == null) {
+        if (keys.mac == null || keys.tokenHex == null) {
             log("no keys yet — tap \"Extract keys (Mi login)\" first")
             return null
         }
-        if (!listening) startListening()
-        if (!awaitVisible()) {
-            log("scale not visible — step on it to wake it; NOT connecting (sleep discipline)")
-            return null
-        }
-        return try {
-            val adapter = adapterOrNull() ?: throw IllegalStateException("no Bluetooth adapter")
-            log("connecting to ${maskMac(mac)} …")
-            val transport = AndroidTransport.connect(adapter.getRemoteDevice(mac), appContext, ::log)
-            try {
-                ScaleSession(transport, hexToBytes(tokenHex), ::log)
-            } catch (c: CancellationException) {
-                // A connected GATT must not leak if session setup is cancelled.
-                withContext(NonCancellable) { runCatching { transport.close() } }
-                throw c
-            } catch (t: Throwable) {
-                // ditto when the constructor itself throws after connect succeeded
-                runCatching { transport.close() }
-                log(
-                    "session setup failed: " +
-                        sanitize(t.message).ifEmpty { t::class.java.simpleName },
-                )
-                null
-            }
-        } catch (c: CancellationException) {
-            throw c
-        } catch (t: Throwable) {
-            log("connect failed: ${sanitize(t.message).ifEmpty { t::class.java.simpleName }}")
-            null
-        }
-    }
-
-    /** Fresh-advertisement gate: [VISIBLE_FRESH_MS]-recent sighting within 10 s. */
-    private suspend fun awaitVisible(): Boolean {
-        val deadline = System.currentTimeMillis() + VISIBILITY_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            if (freshlySeen()) return true
-            delay(200)
-        }
-        return freshlySeen()
-    }
-
-    private fun freshlySeen(): Boolean {
-        val seen = lastSeenMs
-        return seen != 0L && System.currentTimeMillis() - seen < VISIBLE_FRESH_MS
+        return scanner.openSession()
     }
 
     /**
@@ -614,9 +437,6 @@ class SpikeController(private val appContext: Context) {
         }
     }
 
-    private fun adapterOrNull(): BluetoothAdapter? =
-        appContext.getSystemService(BluetoothManager::class.java)?.adapter
-
     private fun describeKeys(): String =
         listOf(
             (if (keyStatus.mac) "MAC ✓" else "MAC –"),
@@ -636,52 +456,9 @@ class SpikeController(private val appContext: Context) {
     companion object {
         private const val LOG_LIMIT = 500
 
-        /** Re-log visibility at most once per minute while the scale broadcasts. */
-        private const val VISIBLE_LOG_GAP_MS = 60_000L
+        fun maskMac(mac: String): String = ScaleScanner.maskMac(mac)
 
-        /** How long [openSession] waits for a wake-up advertisement. */
-        private const val VISIBILITY_TIMEOUT_MS = 10_000L
-
-        /** An advertisement older than this no longer counts as awake. */
-        private const val VISIBLE_FRESH_MS = 4_000L
-
-        private val SERVICE_PARCEL =
-            ParcelUuid(UUID.fromString(AndroidTransport.SERVICE_UUID))
-
-        private val SCAN_SETTINGS = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
-        /** `AA:BB:CC:DD:**:**` — enough to recognise the device, not a handle. */
-        fun maskMac(mac: String): String {
-            val hex = mac.filter { it.isLetterOrDigit() }.uppercase(Locale.US)
-            if (hex.length != 12) return "**:**:**:**:**:**"
-            return (0 until 6).joinToString(":") { i ->
-                if (i < 4) hex.substring(i * 2, i * 2 + 2) else "**"
-            }
-        }
-
-        /**
-         * Any MAC-shaped fragment in free text: the canonical colon/dash
-         * form, or a bare 12-hex word (word-bounded so a 24-hex TOKEN can
-         * never be mistaken for one).
-         */
-        private val MAC_IN_TEXT = Regex(
-            "(?:(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})" +
-                "|(?<![0-9A-Fa-f])[0-9A-Fa-f]{12}(?![0-9A-Fa-f])",
-        )
-
-        /**
-         * Exception text made safe for the log pane: error paths can echo
-         * the raw MAC we handed to `getRemoteDevice` — every MAC-shaped
-         * fragment is masked before logging.
-         */
-        fun sanitize(text: String?): String =
-            text?.replace(MAC_IN_TEXT) { maskMac(it.value) } ?: ""
-
-        /** Validated hex → bytes (only ever fed [SpikeKeyHolder]-validated input). */
-        fun hexToBytes(hex: String): ByteArray =
-            ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        fun sanitize(text: String?): String = ScaleScanner.sanitize(text)
 
         /** 1/100 kg → `80.25 kg`. */
         fun fmtWeight(weight100: Int): String =
@@ -781,6 +558,7 @@ fun SpikeScreen(controller: SpikeController) {
     }
     val pushedCount = records.count { it.garminStatus == GarminStatus.PUSHED }
     val engineState by controller.engineState.collectAsState()
+    val listening by controller.listening.collectAsState()
     val busy = controller.busy
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -878,11 +656,11 @@ fun SpikeScreen(controller: SpikeController) {
             }
             Button(
                 onClick = { controller.toggleListening() },
-                enabled = busy == null || controller.listening,
+                enabled = busy == null || listening,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    if (controller.listening) {
+                    if (listening) {
                         "Listening for scale — tap to stop"
                     } else {
                         "Listen for scale — tap to start"

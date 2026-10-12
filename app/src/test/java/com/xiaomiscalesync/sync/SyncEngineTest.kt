@@ -18,7 +18,9 @@ import com.xiaomiscalesync.fixtures.loopback
 import com.xiaomiscalesync.proto.Profile
 import com.xiaomiscalesync.proto.ProfileJson
 import com.xiaomiscalesync.proto.ScaleSession
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -90,6 +92,7 @@ class SyncEngineTest {
     private inner class Harness(
         configure: (FakeScale) -> Unit = { it.recordsString = "" },
         config: EngineConfig = EngineConfig(liveStartMs = 100, liveIdleMs = 100, liveMaxMs = 3_000),
+        profile: suspend () -> Profile = { Profile() },
     ) {
         val clock = FakeClock(now0Ms)
         val dao = FakeDao()
@@ -99,7 +102,7 @@ class SyncEngineTest {
             nowUnix = { now0 },
         )
         val rig = Rig(token, configure)
-        val engine = SyncEngine(repo, { rig.open() }, Profile(), config, clock)
+        val engine = SyncEngine(repo, { rig.open() }, profile, config, clock)
 
         val rows: List<WeighInRecord> get() = dao.rows.value
     }
@@ -366,9 +369,20 @@ class SyncEngineTest {
             }
         })
 
+        // Every live reading the UI would have rendered, in order.
+        val seenLive = java.util.concurrent.CopyOnWriteArrayList<LiveReading?>()
+        val watcher = launch(Dispatchers.Unconfined) {
+            h.engine.state.collect { seenLive += it.live }
+        }
+
         h.engine.onBeacon(solicitBeacon(9), null)
         val result = h.engine.syncNow()
         assertTrue(result!!.success)
+        watcher.cancel()
+
+        // The 5.3 run surfaced on state while connected, then cleared.
+        assertTrue("live reading must surface mid-listen", seenLive.any { it?.weightGrams in 7000..7020 })
+        assertNull("live reading clears when the listen ends", h.engine.state.value.live)
 
         // Exactly one record, LIVE, from the 5.4 weight; recordedAt = commit time.
         val row = h.rows.single()
@@ -381,6 +395,20 @@ class SyncEngineTest {
         // The engine closed the session after the idle window.
         assertTrue(h.rig.lastAppEnd.notifications.values.all { it.isClosedForReceive })
         assertEquals(1, h.rig.connectCount)
+    }
+
+    @Test(timeout = 20_000)
+    fun profileIsReadFreshForEverySession() = runBlocking<Unit> {
+        var reads = 0
+        val h = Harness(profile = { reads++; Profile(heightCm = 170) })
+
+        h.engine.onBeacon(solicitBeacon(1), null)
+        assertTrue(h.engine.syncNow()!!.success)
+        assertEquals(1, reads)
+
+        // A Settings edit between sessions must reach the next 7.1 push.
+        h.engine.syncNow(force = true)
+        assertEquals(2, reads)
     }
 
     // ---------- (i) pinned profile template ----------
