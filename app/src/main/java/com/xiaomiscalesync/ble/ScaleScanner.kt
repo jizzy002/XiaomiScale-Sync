@@ -60,6 +60,16 @@ class ScaleScanner(
 
     private val _listening = MutableStateFlow(false)
 
+    /**
+     * Master gate (owner request 2026-10-13: an off switch, and leaving the
+     * app must stop listening). While false nothing scans and nothing
+     * connects — not even [openSession]'s own wake-up scan, which could
+     * otherwise restart scanning after the user left. The owning screen
+     * sets it from its resumed state + the listening switch.
+     */
+    @Volatile
+    var allowed: Boolean = true
+
     /** True while a scan is running. */
     val listening: StateFlow<Boolean> = _listening.asStateFlow()
 
@@ -88,6 +98,7 @@ class ScaleScanner(
      * when the adapter, Bluetooth, or a permission is missing.
      */
     fun startListening(): Boolean {
+        if (!allowed) return false
         if (_listening.value) return true
         val adapter = adapterOrNull() ?: run {
             log("no Bluetooth adapter — cannot scan")
@@ -206,6 +217,10 @@ class ScaleScanner(
         val tokenHex = k?.tokenHex
         if (k == null || tokenHex == null) {
             log("no scale keys stored — cannot connect")
+            return null
+        }
+        if (!allowed) {
+            log("listening is off — NOT connecting")
             return null
         }
         if (!_listening.value) startListening()

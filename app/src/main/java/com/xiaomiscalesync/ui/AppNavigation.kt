@@ -27,12 +27,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.data.Secrets
 import com.xiaomiscalesync.data.SettingsStore
 import com.xiaomiscalesync.ui.debug.SpikeController
 import com.xiaomiscalesync.ui.debug.SpikeScreen
 import com.xiaomiscalesync.ui.history.HistoryScreen
 import com.xiaomiscalesync.ui.main.MainScreen
+import com.xiaomiscalesync.ui.profile.ProfileScreen
 import com.xiaomiscalesync.ui.onboarding.GarminSso
 import com.xiaomiscalesync.ui.onboarding.MiCloudKeyExtractor
 import com.xiaomiscalesync.ui.onboarding.OnboardingScreen
@@ -129,21 +131,26 @@ private val wizardSaver: Saver<WizardAnswers?, Any> = listSaver(
     },
 )
 
-/** The two bottom-bar destinations. */
-private enum class Tab(val label: String) { HOME("Home"), HISTORY("History") }
+/** The bottom-bar destinations. */
+private enum class Tab(val label: String) { HOME("Home"), HISTORY("History"), PROFILE("Profile") }
 
 /**
- * The Main destination: Home (the weighing screen, Task 15) and History
- * (Task 16) behind a bottom navigation bar. Home scans only while it is
- * the visible tab (spec: no listening off-screen). The milestone-0 debug
- * spike stays reachable from Home's overflow menu (opened on demand, so
- * its controller only spins up when used; system back returns).
+ * The Main destination: Home (weighing, Task 15), History (Task 16) and
+ * Profile (logins + settings, Task 17) behind a bottom navigation bar.
+ * Only Home listens to the scale, and only while it is visible and its
+ * listening switch is on. The switch resets to ON at every fresh launch
+ * (owner ruling 2026-10-13) — it survives rotation, not an app exit.
+ * The milestone-0 debug spike stays reachable from Profile.
  */
 @Composable
 private fun MainRoute() {
     val appContext = LocalContext.current.applicationContext
     var showSpike by rememberSaveable { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
+    var listeningOn by rememberSaveable { mutableStateOf(true) }
+
+    // App open: push anything left pending (e.g. a failed network push).
+    LaunchedEffect(Unit) { AppGraph.of(appContext).pushIfPending() }
 
     if (showSpike) {
         BackHandler { showSpike = false }
@@ -168,7 +175,11 @@ private fun MainRoute() {
                         onClick = { tab = t },
                         icon = {
                             Icon(
-                                if (t == Tab.HOME) AppIcons.Home else AppIcons.History,
+                                when (t) {
+                                    Tab.HOME -> AppIcons.Home
+                                    Tab.HISTORY -> AppIcons.History
+                                    Tab.PROFILE -> AppIcons.Person
+                                },
                                 contentDescription = null,
                             )
                         },
@@ -181,10 +192,13 @@ private fun MainRoute() {
         Box(Modifier.padding(padding).consumeWindowInsets(padding)) {
             when (tab) {
                 Tab.HOME -> MainScreen(
-                    onOpenDebug = { showSpike = true },
+                    listeningOn = listeningOn,
+                    onListeningChange = { listeningOn = it },
                     onOpenHistory = { tab = Tab.HISTORY },
+                    onOpenProfile = { tab = Tab.PROFILE },
                 )
                 Tab.HISTORY -> HistoryScreen()
+                Tab.PROFILE -> ProfileScreen(onOpenDebug = { showSpike = true })
             }
         }
     }

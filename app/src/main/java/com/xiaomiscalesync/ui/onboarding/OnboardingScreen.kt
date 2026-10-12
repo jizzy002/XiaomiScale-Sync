@@ -526,7 +526,7 @@ private fun KeyChip(label: String, ok: Boolean) {
 
 /** Second-factor code dialog (Mi 2FA / Garmin MFA); dismiss = cancel. */
 @Composable
-private fun CodeDialog(promptText: String, onSubmit: (String?) -> Unit) {
+internal fun CodeDialog(promptText: String, onSubmit: (String?) -> Unit) {
     var code by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = { onSubmit(null) },
@@ -555,7 +555,7 @@ private fun CodeDialog(promptText: String, onSubmit: (String?) -> Unit) {
  * fixing the spike's "too small" rendering. Dismiss = cancel.
  */
 @Composable
-private fun CaptchaDialog(image: ByteArray, onSubmit: (String?) -> Unit) {
+internal fun CaptchaDialog(image: ByteArray, onSubmit: (String?) -> Unit) {
     var code by remember { mutableStateOf("") }
     val bitmap = remember(image) { BitmapFactory.decodeByteArray(image, 0, image.size) }
     AlertDialog(

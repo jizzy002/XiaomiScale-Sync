@@ -17,6 +17,7 @@ import com.xiaomiscalesync.garmin.GarminPusher
 import com.xiaomiscalesync.proto.toProfile
 import com.xiaomiscalesync.sync.SyncEngine
 import com.xiaomiscalesync.work.PushWorker
+import com.xiaomiscalesync.work.enqueueIfPending
 import java.time.Clock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -67,7 +68,10 @@ class AppGraph private constructor(private val appContext: Context) {
         },
         log = ::log,
         onBeacon = { beacon, weighIn -> handleBeacon(beacon, weighIn) },
-    )
+    ).apply {
+        // Closed until the Home tab opens it (resumed + listening switch on).
+        allowed = false
+    }
 
     val engine = SyncEngine(
         repo,
@@ -94,6 +98,14 @@ class AppGraph private constructor(private val appContext: Context) {
         if ((weighIn != null || synced) && repo.pending().isNotEmpty()) {
             PushWorker.enqueue(appContext)
         }
+    }
+
+    /**
+     * The app-open push (plan Task 17): one [PushWorker] pass when anything
+     * is pending — e.g. rows left PENDING by a network failure last time.
+     */
+    suspend fun pushIfPending() {
+        enqueueIfPending({ repo.pending().size }) { PushWorker.enqueue(appContext) }
     }
 
     /** Logcat only; every caller passes masked/sanitized text (no key material). */

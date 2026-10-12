@@ -53,6 +53,17 @@ class OnboardingViewModelTest {
             profileCalls += Triple(heightCm, age, sex)
             order += "profile"
         }
+
+        var miAccount: String? = null
+        var garminEmail: String? = null
+
+        override suspend fun setMiAccount(v: String) {
+            miAccount = v
+        }
+
+        override suspend fun setGarminEmail(v: String) {
+            garminEmail = v
+        }
     }
 
     private class FakeVault(
@@ -307,6 +318,9 @@ class OnboardingViewModelTest {
         // The main screen's first sync reads the profile as soon as
         // onboarded flips — it must already be on disk by then.
         assertEquals(listOf("profile", "onboarded"), settings.order)
+        // Account identifiers (never passwords) feed the Profile tab.
+        assertEquals("owner@example.com", settings.miAccount)
+        assertEquals("owner@example.com", settings.garminEmail)
     }
 
     // ------------------------------------------------------- extraction path

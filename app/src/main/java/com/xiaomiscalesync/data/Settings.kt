@@ -26,6 +26,9 @@ data class Settings(
     val age: Int? = null,
     /** Scale convention: 1 = male, 2 = female. */
     val sex: Int = 1,
+    /** Account identifiers shown on the Profile tab (never passwords or keys). */
+    val miAccount: String? = null,
+    val garminEmail: String? = null,
 ) {
     companion object {
         const val DEFAULT_MID = "1"
@@ -54,6 +57,12 @@ interface SettingsWriter {
 
     /** The scale profile answers (action 7.1 metadata), written at Finish. */
     suspend fun setProfile(heightCm: Int, age: Int, sex: Int)
+
+    /** The Mi account the keys came from (email/phone — an identifier only). */
+    suspend fun setMiAccount(v: String)
+
+    /** The Garmin Connect account email (an identifier only). */
+    suspend fun setGarminEmail(v: String)
 }
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -88,6 +97,14 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         }
     }
 
+    override suspend fun setMiAccount(v: String) {
+        dataStore.edit { it[KEY_MI_ACCOUNT] = v }
+    }
+
+    override suspend fun setGarminEmail(v: String) {
+        dataStore.edit { it[KEY_GARMIN_EMAIL] = v }
+    }
+
     private fun Preferences.toSettings(): Settings = Settings(
         onboarded = this[KEY_ONBOARDED] ?: false,
         backfillCutoff = this[KEY_CUTOFF],
@@ -95,6 +112,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         heightCm = this[KEY_HEIGHT],
         age = this[KEY_AGE],
         sex = this[KEY_SEX] ?: 1,
+        miAccount = this[KEY_MI_ACCOUNT],
+        garminEmail = this[KEY_GARMIN_EMAIL],
     )
 
     companion object {
@@ -104,6 +123,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         private val KEY_HEIGHT = intPreferencesKey("height_cm")
         private val KEY_AGE = intPreferencesKey("age")
         private val KEY_SEX = intPreferencesKey("sex")
+        private val KEY_MI_ACCOUNT = stringPreferencesKey("mi_account")
+        private val KEY_GARMIN_EMAIL = stringPreferencesKey("garmin_email")
 
         fun of(context: Context): SettingsStore = SettingsStore(context.settingsDataStore)
     }

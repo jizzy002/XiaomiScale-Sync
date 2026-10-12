@@ -4,6 +4,7 @@ import com.xiaomiscalesync.data.KeyFormat
 import com.xiaomiscalesync.data.KeyVault
 import com.xiaomiscalesync.data.Settings
 import com.xiaomiscalesync.data.SettingsWriter
+import com.xiaomiscalesync.data.storeExtracted
 import com.xiaomiscalesync.garmin.GarminClient
 import com.xiaomiscalesync.garmin.TokenStore
 import com.xiaomiscalesync.xiaomi.MiCloudClient
@@ -37,6 +38,8 @@ data class OnboardingState(
     val tokenOk: Boolean = false,
     val bleKeyOk: Boolean = false,
     val foundScale: String? = null,
+    /** The Mi account the keys came from — an identifier, shown on Profile. */
+    val miAccount: String? = null,
     val manualMode: Boolean = false,
     val manualMac: String = "",
     val manualToken: String = "",
@@ -256,14 +259,13 @@ class OnboardingViewModel(
         update { it.copy(busy = true, error = null) }
         try {
             val device = mi.extractKeys(username, password, onCaptcha, onSecondFactor)
-            val macOk = KeyFormat.isMac(device.mac)
-            val tokenOk = KeyFormat.isToken(device.tokenHex)
-            val bleKeyOk = KeyFormat.isBleKey(device.bleKeyHex)
-            if (macOk) secrets.saveMac(KeyFormat.normalizeMac(device.mac))
-            if (tokenOk) secrets.saveToken(device.tokenHex!!)
-            if (bleKeyOk) secrets.saveBleKey(device.bleKeyHex!!)
+            val stored = secrets.storeExtracted(device.mac, device.tokenHex, device.bleKeyHex)
+            val macOk = stored.mac
+            val tokenOk = stored.token
+            val bleKeyOk = stored.bleKey
             update {
                 it.copy(
+                    miAccount = username.trim(),
                     macOk = macOk,
                     tokenOk = tokenOk,
                     bleKeyOk = bleKeyOk,
@@ -408,6 +410,8 @@ class OnboardingViewModel(
             // nextFromProfile validated both; the profile lands before
             // onboarded so Main's first sync already pushes the real answers.
             settings.setProfile(heightCm = height, age = age, sex = state.sex)
+            state.miAccount?.let { settings.setMiAccount(it) }
+            if (state.garminUser.isNotBlank()) settings.setGarminEmail(state.garminUser.trim())
             settings.setOnboarded(true)
             update { it.copy(completed = true, busy = false, mid = mid) }
         } catch (c: CancellationException) {

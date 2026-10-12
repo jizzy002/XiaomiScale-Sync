@@ -55,6 +55,21 @@ class WeighInRepository(
 
     suspend fun setGarminStatus(ids: List<Long>, s: GarminStatus) = dao.setGarminStatus(ids, s)
 
+    /**
+     * After a Garmin re-login: rows the expired sign-in blocked go back to
+     * PENDING (the duplicate guard still runs before each push). Returns
+     * how many were re-queued.
+     */
+    suspend fun requeueAuthBlocked(): Int {
+        val ids = dao.rowsWith(status = GarminStatus.AUTH_REQUIRED, category = Category.MINE).map { it.id }
+        if (ids.isNotEmpty()) dao.setGarminStatus(ids, GarminStatus.PENDING)
+        return ids.size
+    }
+
+    /** True when any owner row is blocked on an expired Garmin sign-in. */
+    suspend fun hasAuthBlocked(): Boolean =
+        dao.rowsWith(status = GarminStatus.AUTH_REQUIRED, category = Category.MINE).isNotEmpty()
+
     /** Marks rows PUSHED and stamps [pushedAt] (unix seconds) in one write. */
     suspend fun markPushed(ids: List<Long>, pushedAt: Long) =
         dao.setGarminStatusAt(ids, GarminStatus.PUSHED, pushedAt)

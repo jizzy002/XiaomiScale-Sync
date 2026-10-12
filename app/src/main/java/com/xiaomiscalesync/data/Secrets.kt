@@ -53,6 +53,25 @@ object KeyFormat {
             .uppercase(java.util.Locale.US)
             .chunked(2)
             .joinToString(":")
+
+    /** `AA:BB:CC:DD:**:**` — enough to recognise the scale, never a handle. */
+    fun maskMac(value: String): String {
+        val hex = value.filter { it.isLetterOrDigit() }.uppercase(java.util.Locale.US)
+        if (hex.length != 12) return "**:**:**:**:**:**"
+        return (0 until 6).joinToString(":") { i -> if (i < 4) hex.substring(i * 2, i * 2 + 2) else "**" }
+    }
+
+    /**
+     * Any MAC-shaped fragment in free text — canonical colon/dash form, or
+     * a bare 12-hex word (word-bounded so a 24-hex TOKEN never matches).
+     */
+    private val MAC_IN_TEXT = Regex(
+        "(?:(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})" +
+            "|(?<![0-9A-Fa-f])[0-9A-Fa-f]{12}(?![0-9A-Fa-f])",
+    )
+
+    /** Exception text made safe for display: every MAC-shaped fragment masked. */
+    fun sanitize(text: String?): String = text?.replace(MAC_IN_TEXT) { maskMac(it.value) } ?: ""
 }
 
 /**
@@ -84,6 +103,40 @@ interface KeyVault {
     fun hasBleKey(): Boolean
 }
 
+/** Which of an extracted/pasted trio actually validated and was stored. */
+data class StoredKeys(val mac: Boolean, val token: Boolean, val bleKey: Boolean) {
+    val complete: Boolean get() = mac && token && bleKey
+}
+
+/**
+ * Validates each key independently and stores only the valid ones —
+ * the shared rule for the onboarding wizard and the Profile tab's
+ * re-extraction (a malformed key never reaches storage).
+ */
+fun KeyVault.storeExtracted(mac: String, tokenHex: String?, bleKeyHex: String?): StoredKeys {
+    val macOk = KeyFormat.isMac(mac)
+    val tokenOk = KeyFormat.isToken(tokenHex)
+    val bleKeyOk = KeyFormat.isBleKey(bleKeyHex)
+    if (macOk) saveMac(KeyFormat.normalizeMac(mac))
+    if (tokenOk) saveToken(tokenHex!!)
+    if (bleKeyOk) saveBleKey(bleKeyHex!!)
+    return StoredKeys(macOk, tokenOk, bleKeyOk)
+}
+
+/**
+ * Read access to the stored key *values* — only for the Profile tab's
+ * explicit, owner-initiated "Reveal" (backup/copy). Deliberately separate
+ * from [KeyVault] so the wizard and everything else keep seeing presence
+ * flags only. Values must never be logged.
+ */
+interface KeyReader {
+    fun mac(): String?
+
+    fun token(): String?
+
+    fun bleKey(): String?
+}
+
 /**
  * Keystore-backed secret storage — the production replacement for the
  * spike's plain-prefs `SpikeKeyHolder` (which the debug screen keeps for
@@ -104,7 +157,7 @@ interface KeyVault {
  * key) read as "absent" so the UI routes the owner back through
  * onboarding/Settings rather than crashing.
  */
-class Secrets(context: Context) : KeyVault, TokenStore {
+class Secrets(context: Context) : KeyVault, KeyReader, TokenStore {
 
     private val prefs = context.getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
 
@@ -126,13 +179,13 @@ class Secrets(context: Context) : KeyVault, TokenStore {
     }
 
     /** The scale's MAC (canonical `AA:BB:…` form), or null before extraction. */
-    fun mac(): String? = get(KEY_MAC)
+    override fun mac(): String? = get(KEY_MAC)
 
     /** Cloud TOKEN (24 hex chars), or null before extraction. */
-    fun token(): String? = get(KEY_TOKEN)
+    override fun token(): String? = get(KEY_TOKEN)
 
     /** BLE KEY (32 hex chars), or null before extraction. */
-    fun bleKey(): String? = get(KEY_BLE_KEY)
+    override fun bleKey(): String? = get(KEY_BLE_KEY)
 
     /**
      * Presence probes for the wizard's re-entry seeding — booleans only,

@@ -19,18 +19,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -55,7 +52,6 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.data.WeighInSource
 import com.xiaomiscalesync.sync.LiveReading
-import com.xiaomiscalesync.ui.theme.AppIcons
 import com.xiaomiscalesync.ui.theme.Pill
 import com.xiaomiscalesync.ui.theme.Tone
 import com.xiaomiscalesync.ui.theme.container
@@ -77,7 +73,12 @@ import java.util.Locale
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(onOpenDebug: () -> Unit, onOpenHistory: () -> Unit = {}) {
+fun MainScreen(
+    listeningOn: Boolean,
+    onListeningChange: (Boolean) -> Unit,
+    onOpenHistory: () -> Unit = {},
+    onOpenProfile: () -> Unit = {},
+) {
     val graph = AppGraph.of(LocalContext.current)
     val scanner = graph.scanner
     val viewModel = remember(graph) {
@@ -100,11 +101,15 @@ fun MainScreen(onOpenDebug: () -> Unit, onOpenHistory: () -> Unit = {}) {
         if (missing.isNotEmpty()) launcher.launch(missing.toTypedArray())
     }
 
-    // Scan strictly while resumed: pause / leaving the screen stops it.
-    LifecycleResumeEffect(scanner, permissionTick) {
+    // Scan strictly while resumed AND switched on. Pausing (home button,
+    // app switcher, screen off), leaving the tab, exiting, or flipping the
+    // switch off closes the scanner gate — no scan, no new connection.
+    LifecycleResumeEffect(scanner, permissionTick, listeningOn) {
         missing = scanner.missingPermissions()
-        if (missing.isEmpty() && scanner.startListening()) viewModel.onListeningStarted()
+        scanner.allowed = listeningOn
+        if (listeningOn && missing.isEmpty() && scanner.startListening()) viewModel.onListeningStarted()
         onPauseOrDispose {
+            scanner.allowed = false
             scanner.stopListening()
             viewModel.onListeningStopped()
         }
@@ -118,29 +123,8 @@ fun MainScreen(onOpenDebug: () -> Unit, onOpenHistory: () -> Unit = {}) {
         onDispose { view.keepScreenOn = false }
     }
 
-    var menuOpen by remember { mutableStateOf(false) }
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Scale Sync") },
-                actions = {
-                    Box {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(AppIcons.More, contentDescription = "More")
-                        }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Debug tools") },
-                                onClick = {
-                                    menuOpen = false
-                                    onOpenDebug()
-                                },
-                            )
-                        }
-                    }
-                },
-            )
-        },
+        topBar = { TopAppBar(title = { Text("Scale Sync") }) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -150,16 +134,16 @@ fun MainScreen(onOpenDebug: () -> Unit, onOpenHistory: () -> Unit = {}) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (missing.isNotEmpty()) {
+            if (listeningOn && missing.isNotEmpty()) {
                 BannerCard(
                     "Bluetooth access is needed to hear the scale.",
                     tone = Tone.ERROR,
                     action = "Allow" to { launcher.launch(missing.toTypedArray()) },
                 )
             }
-            for (banner in ui.banners) BannerFor(banner, onOpenHistory)
+            for (banner in ui.banners) BannerFor(banner, onReview = onOpenHistory, onSignIn = onOpenProfile)
 
-            StatusCard(ui.headline, listening)
+            StatusCard(ui.headline, listeningOn, listening, onListeningChange)
             ui.live?.let { LiveCard(it) }
             val latest = ui.latest
             if (latest != null) LatestWeighInCard(latest) else EmptyCard()
@@ -167,9 +151,19 @@ fun MainScreen(onOpenDebug: () -> Unit, onOpenHistory: () -> Unit = {}) {
     }
 }
 
+/**
+ * Listening status with the dedicated on/off switch. [switchOn] is the
+ * owner's choice; [scanning] whether the scan actually runs (it can be on
+ * but blocked by Bluetooth being off or a missing permission).
+ */
 @Composable
-private fun StatusCard(headline: Headline, listening: Boolean) {
-    val active = listening && headline != Headline.READY
+private fun StatusCard(
+    headline: Headline,
+    switchOn: Boolean,
+    scanning: Boolean,
+    onSwitch: (Boolean) -> Unit,
+) {
+    val active = scanning && headline != Headline.READY
     Card(
         Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -187,19 +181,26 @@ private fun StatusCard(headline: Headline, listening: Boolean) {
                         .size(10.dp)
                         .clip(CircleShape)
                         .background(
-                            if (listening) MaterialTheme.colorScheme.primary
+                            if (scanning) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.outline,
                         ),
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    if (listening) headline.label else "Not listening",
+                    when {
+                        !switchOn -> "Listening off"
+                        !scanning -> "Not listening"
+                        else -> headline.label
+                    },
                     style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f),
                 )
+                Switch(checked = switchOn, onCheckedChange = onSwitch)
             }
             Text(
                 when {
-                    !listening -> "Bluetooth is off or access is missing."
+                    !switchOn -> "Saving battery. Weigh-ins stay on the scale and are fetched when you turn listening back on."
+                    !scanning -> "Bluetooth is off or access is missing."
                     headline == Headline.SYNCING -> "Talking to the scale — stay close."
                     headline == Headline.SCALE_SEEN -> "The scale is awake."
                     else -> "Step on the scale with this screen open."
@@ -280,13 +281,17 @@ private fun EmptyCard() {
 }
 
 @Composable
-private fun BannerFor(banner: Banner, onReview: () -> Unit) = when (banner) {
+private fun BannerFor(banner: Banner, onReview: () -> Unit, onSignIn: () -> Unit) = when (banner) {
     is Banner.Silence -> BannerCard(
         "Scale not heard for ${banner.hours} hours. If its Bluetooth icon stays solid when you " +
             "step on, take the batteries out for 10 seconds.",
         tone = Tone.WARNING,
     )
-    Banner.AuthRequired -> BannerCard("Garmin sign-in expired — re-login in Settings", tone = Tone.ERROR)
+    Banner.AuthRequired -> BannerCard(
+        "Garmin sign-in expired.",
+        tone = Tone.ERROR,
+        action = "Sign in" to onSignIn,
+    )
     Banner.NeedsReview -> BannerCard(
         "Someone else weighed in.",
         tone = Tone.WARNING,

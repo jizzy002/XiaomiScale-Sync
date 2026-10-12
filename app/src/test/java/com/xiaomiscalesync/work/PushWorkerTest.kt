@@ -91,4 +91,16 @@ class PushWorkerTest {
         // A stopped/cancelled worker is neither a failure nor an incident.
         runGarminPush({ throw CancellationException("worker stopped") }) { unreachable() }
     }
+
+    // ---------- app-open push (plan Task 17) ----------
+
+    @Test
+    fun appOpenEnqueuesOnlyWhenSomethingIsPending() = runBlocking {
+        var enqueued = 0
+        assertEquals(false, enqueueIfPending({ 0 }) { enqueued++ })
+        assertEquals(0, enqueued)
+
+        assertEquals(true, enqueueIfPending({ 2 }) { enqueued++ })
+        assertEquals(1, enqueued)
+    }
 }

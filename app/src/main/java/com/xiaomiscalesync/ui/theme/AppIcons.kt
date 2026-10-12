@@ -36,6 +36,18 @@ object AppIcons {
         moveTo(7f, 17f); horizontalLineTo(21f); verticalLineTo(19f); horizontalLineTo(7f); close()
     }
 
+    /** Person: head circle + shoulders. */
+    val Person: ImageVector = icon("person") {
+        moveTo(12f, 4f)
+        arcToRelative(4f, 4f, 0f, true, true, 0f, 8f)
+        arcToRelative(4f, 4f, 0f, true, true, 0f, -8f)
+        close()
+        moveTo(4f, 20f); verticalLineTo(18.5f)
+        curveTo(4f, 15.5f, 9f, 14f, 12f, 14f)
+        curveTo(15f, 14f, 20f, 15.5f, 20f, 18.5f)
+        verticalLineTo(20f); close()
+    }
+
     /** Vertical ellipsis (overflow menu). */
     val More: ImageVector = icon("more") {
         for (cy in listOf(5f, 12f, 19f)) {

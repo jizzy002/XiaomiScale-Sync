@@ -101,6 +101,21 @@ class PushWorker(
 }
 
 /**
+ * The app-open push (plan Task 17): enqueue one [PushWorker] pass only when
+ * something is actually pending — an idle open schedules nothing. Pulled out
+ * as a plain function so the rule pins on the JVM (`PushWorkerTest`).
+ * Returns whether a pass was enqueued.
+ */
+internal suspend fun enqueueIfPending(
+    pendingCount: suspend () -> Int,
+    enqueue: () -> Unit,
+): Boolean {
+    if (pendingCount() == 0) return false
+    enqueue()
+    return true
+}
+
+/**
  * The worker's whole decision path, extracted so it pins on the plain JVM
  * (`PushWorkerTest`): run [push] once behind the exception boundary and map
  * the outcome to a WorkManager result. [log] receives an unexpected throwable
