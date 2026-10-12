@@ -49,6 +49,11 @@ data class LatestCard(
     val recordedAt: Long,
     val source: WeighInSource,
     val chip: StatusChip,
+    /**
+     * Change vs the owner's previous weigh-in (1/100 kg); null when this row
+     * is not the owner's or there is nothing earlier to compare with.
+     */
+    val deltaGrams: Int? = null,
 )
 
 data class MainUiState(
@@ -56,6 +61,8 @@ data class MainUiState(
     val latest: LatestCard? = null,
     val live: LiveReading? = null,
     val banners: List<Banner> = emptyList(),
+    /** The few captures before [latest], newest first (Home's short history). */
+    val recent: List<LatestCard> = emptyList(),
 )
 
 /**
@@ -100,7 +107,8 @@ object MainUi {
             engine.lastHeardAt != null && nowMs - engine.lastHeardAt < SEEN_FRESH_MS -> Headline.SCALE_SEEN
             else -> Headline.READY
         }
-        val newest = records.maxByOrNull { it.recordedAt }
+        val sorted = records.sortedByDescending { it.recordedAt }
+        val newest = sorted.firstOrNull()
         val banners = buildList {
             if (listeningSinceMs != null) {
                 val quietSince = maxOf(listeningSinceMs, engine.lastHeardAt ?: Long.MIN_VALUE)
@@ -112,17 +120,30 @@ object MainUi {
         }
         return MainUiState(
             headline = headline,
-            latest = newest?.let {
-                LatestCard(
-                    id = it.id,
-                    weightGrams = it.weightGrams,
-                    recordedAt = it.recordedAt,
-                    source = it.source,
-                    chip = statusChip(it.category, it.garminStatus),
-                )
-            },
+            latest = newest?.let { card(it, sorted) },
             live = engine.live,
             banners = banners,
+            recent = sorted.drop(1).take(RECENT_COUNT).map { card(it, sorted) },
+        )
+    }
+
+    /** How many earlier captures Home lists under the latest one. */
+    const val RECENT_COUNT = 4
+
+    /** [row] as a card; [sortedDesc] (newest first) supplies the delta's baseline. */
+    private fun card(row: WeighInRecord, sortedDesc: List<WeighInRecord>): LatestCard {
+        val previousMine = if (row.category != Category.MINE) {
+            null
+        } else {
+            sortedDesc.firstOrNull { it.category == Category.MINE && it.recordedAt < row.recordedAt }
+        }
+        return LatestCard(
+            id = row.id,
+            weightGrams = row.weightGrams,
+            recordedAt = row.recordedAt,
+            source = row.source,
+            chip = statusChip(row.category, row.garminStatus),
+            deltaGrams = previousMine?.let { row.weightGrams - it.weightGrams },
         )
     }
 }

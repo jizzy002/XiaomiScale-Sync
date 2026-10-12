@@ -10,6 +10,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.xiaomiscalesync.data.ThemeMode
 
 /** Fallback palette below Android 12 (no dynamic color): a calm teal. */
 private val LightColors = lightColorScheme(
@@ -34,13 +35,22 @@ private val DarkColors = darkColorScheme(
     onTertiaryContainer = Color(0xFFFFDDB3),
 )
 
+/** Whether [mode] resolves to dark right now. */
+@Composable
+fun ThemeMode.isDark(): Boolean = when (this) {
+    ThemeMode.SYSTEM -> isSystemInDarkTheme()
+    ThemeMode.LIGHT -> false
+    ThemeMode.DARK -> true
+}
+
 /**
  * The app's Material 3 theme: the wallpaper-derived dynamic scheme on
- * Android 12+, the teal fallback below, following the system dark mode.
+ * Android 12+, the teal fallback below; light/dark per [mode] (Profile
+ * tab), SYSTEM following the phone.
  */
 @Composable
-fun AppTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun AppTheme(mode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
+    val dark = mode.isDark()
     val colors = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current

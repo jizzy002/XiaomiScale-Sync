@@ -171,6 +171,29 @@ class MainViewModelTest {
         assertFalse(Banner.NeedsReview in MainUi.reduce(EngineState(), older, t0, t0).banners)
     }
 
+    // ------------------------------------------------- recent list + deltas
+
+    @Test
+    fun recentListsTheNextFourAfterTheLatestNewestFirst() {
+        val records = (1..7L).map { record(id = it, recordedAt = it * 100) }
+        val s = MainUi.reduce(EngineState(), records, t0, t0)
+        assertEquals(7L, s.latest!!.id)
+        assertEquals(listOf(6L, 5L, 4L, 3L), s.recent.map { it.id })
+    }
+
+    @Test
+    fun deltaIsAgainstTheOwnersPreviousWeighInSkippingOthers() {
+        val records = listOf(
+            record(id = 1, recordedAt = 100).copy(weightGrams = 8500),
+            record(id = 2, recordedAt = 200, category = Category.NEEDS_REVIEW).copy(weightGrams = 6000),
+            record(id = 3, recordedAt = 300).copy(weightGrams = 8420),
+        )
+        val s = MainUi.reduce(EngineState(), records, t0, t0)
+        assertEquals("guest row in between is ignored", -80, s.latest!!.deltaGrams)
+        assertNull("no delta for a row that is not the owner's", s.recent.first { it.id == 2L }.deltaGrams)
+        assertNull("the owner's first weigh-in has nothing to compare", s.recent.first { it.id == 1L }.deltaGrams)
+    }
+
     @Test
     fun liveReadingPassesThrough() {
         val s = MainUi.reduce(EngineState(live = LiveReading(7020, stable = true)), emptyList(), t0, t0)

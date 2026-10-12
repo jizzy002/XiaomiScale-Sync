@@ -22,6 +22,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
@@ -29,6 +30,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -147,6 +149,7 @@ fun MainScreen(
             ui.live?.let { LiveCard(it) }
             val latest = ui.latest
             if (latest != null) LatestWeighInCard(latest) else EmptyCard()
+            if (ui.recent.isNotEmpty()) RecentSection(ui.recent, onSeeAll = onOpenHistory)
         }
     }
 }
@@ -248,9 +251,56 @@ private fun LatestWeighInCard(latest: LatestCard) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.size(8.dp))
-            Pill(latest.chip.label, latest.chip.tone())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill(latest.chip.label, latest.chip.tone())
+                latest.deltaGrams?.let { Pill("${delta(it)} since last", Tone.NEUTRAL) }
+            }
         }
     }
+}
+
+/** Home's short history: the few captures before the latest, with "See all". */
+@Composable
+private fun RecentSection(recent: List<LatestCard>, onSeeAll: () -> Unit) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Recent", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            TextButton(onClick = onSeeAll) { Text("See all") }
+        }
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            recent.forEachIndexed { i, row ->
+                if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "${kg(row.weightGrams)} kg",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            time(row.recordedAt) + (row.deltaGrams?.let { " · ${delta(it)}" } ?: ""),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Pill(row.chip.label, row.chip.tone(), compact = true)
+                }
+            }
+        }
+    }
+}
+
+/** `-0.80 kg` / `+0.15 kg` / `±0.00 kg` — neutral wording, no judgement. */
+private fun delta(grams100: Int): String {
+    val sign = when {
+        grams100 > 0 -> "+"
+        grams100 < 0 -> "−"
+        else -> "±"
+    }
+    return "$sign${kg(kotlin.math.abs(grams100))} kg"
 }
 
 /** `84.20` large with a smaller `kg` on the same baseline. */

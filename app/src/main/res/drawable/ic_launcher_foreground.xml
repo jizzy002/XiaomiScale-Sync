@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Scale glyph inside the 66dp adaptive-icon safe zone (21..87 of 108). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Scale body -->
+    <path
+        android:pathData="M40,32 H68 A8,8 0 0 1 76,40 V68 A8,8 0 0 1 68,76 H40 A8,8 0 0 1 32,68 V40 A8,8 0 0 1 40,32 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:fillColor="#00000000" />
+    <!-- Dial arc -->
+    <path
+        android:pathData="M43,54 A11,11 0 0 1 65,54"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- Needle -->
+    <path
+        android:pathData="M54,54 L59,46"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- Display -->
+    <path
+        android:pathData="M47,65 H61"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>

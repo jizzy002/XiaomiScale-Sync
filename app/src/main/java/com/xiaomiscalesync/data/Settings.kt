@@ -29,12 +29,17 @@ data class Settings(
     /** Account identifiers shown on the Profile tab (never passwords or keys). */
     val miAccount: String? = null,
     val garminEmail: String? = null,
+    /** App appearance; SYSTEM follows the phone's dark-mode setting. */
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
 ) {
     companion object {
         const val DEFAULT_MID = "1"
         val DEFAULT = Settings(onboarded = false, backfillCutoff = null, mid = DEFAULT_MID)
     }
 }
+
+/** App appearance choice (Profile tab). */
+enum class ThemeMode(val label: String) { SYSTEM("System"), LIGHT("Light"), DARK("Dark") }
 
 /** Read seam so the repository stays JVM-testable without DataStore. */
 fun interface SettingsSource {
@@ -105,6 +110,11 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         dataStore.edit { it[KEY_GARMIN_EMAIL] = v }
     }
 
+    /** A pure UI preference — not part of [SettingsWriter]'s onboarding seam. */
+    suspend fun setThemeMode(v: ThemeMode) {
+        dataStore.edit { it[KEY_THEME] = v.name }
+    }
+
     private fun Preferences.toSettings(): Settings = Settings(
         onboarded = this[KEY_ONBOARDED] ?: false,
         backfillCutoff = this[KEY_CUTOFF],
@@ -114,6 +124,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         sex = this[KEY_SEX] ?: 1,
         miAccount = this[KEY_MI_ACCOUNT],
         garminEmail = this[KEY_GARMIN_EMAIL],
+        themeMode = ThemeMode.entries.firstOrNull { it.name == this[KEY_THEME] } ?: ThemeMode.SYSTEM,
     )
 
     companion object {
@@ -125,6 +136,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         private val KEY_SEX = intPreferencesKey("sex")
         private val KEY_MI_ACCOUNT = stringPreferencesKey("mi_account")
         private val KEY_GARMIN_EMAIL = stringPreferencesKey("garmin_email")
+        private val KEY_THEME = stringPreferencesKey("theme_mode")
 
         fun of(context: Context): SettingsStore = SettingsStore(context.settingsDataStore)
     }

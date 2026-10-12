@@ -28,6 +28,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -47,6 +50,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.xiaomiscalesync.AppGraph
+import com.xiaomiscalesync.data.ThemeMode
 import com.xiaomiscalesync.garmin.GarminAuthError
 import com.xiaomiscalesync.ui.debug.CodePrompt
 import com.xiaomiscalesync.ui.onboarding.CaptchaDialog
@@ -187,6 +191,21 @@ fun ProfileScreen(onOpenDebug: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 FilledTonalButton(onClick = { scope.launch { viewModel.saveProfile() } }) { Text("Save profile") }
+            }
+
+            // ------------------------------------------------ appearance
+            Section("Appearance") {
+                val settings by graph.settings.settings.collectAsState(initial = null)
+                val current = settings?.themeMode ?: ThemeMode.SYSTEM
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    ThemeMode.entries.forEachIndexed { i, mode ->
+                        SegmentedButton(
+                            selected = mode == current,
+                            onClick = { scope.launch { graph.settings.setThemeMode(mode) } },
+                            shape = SegmentedButtonDefaults.itemShape(i, ThemeMode.entries.size),
+                        ) { Text(mode.label) }
+                    }
+                }
             }
 
             // ----------------------------------------------------- other
