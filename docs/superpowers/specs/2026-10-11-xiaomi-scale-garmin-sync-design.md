@@ -180,7 +180,10 @@ Garmin but not the app's archive.
   manual-paste fallback).
 - API calls: `https://[region.]api.io.mi.com/app` with RC4 encryption
   (`MIOT-ENCRYPT-ALGORITHM: ENCRYPT-RC4`, signed_nonce =
-  `SHA256(base64(ssecurity) || base64(nonce))`, HMAC-SHA1 enc signatures,
+  `SHA256(base64(ssecurity) || base64(nonce))`, plain SHA-1 signatures
+  (erratum: an earlier revision said HMAC-SHA1 — Task 10 verified against
+  the reference `token_extractor.py`, which uses plain SHA-1; reference
+  wire behavior is authoritative),
   RC4 with the first 1024 bytes dropped — port `generate_enc_params` /
   `decrypt_rc4` exactly). Cookies: `userId`, `serviceToken`,
   `yetAnotherServiceToken`.
