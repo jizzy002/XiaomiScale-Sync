@@ -152,10 +152,10 @@ fun MainScreen(
             for (banner in ui.banners) BannerFor(banner, onReview = onOpenHistory, onSignIn = onOpenProfile)
 
             StatusCard(ui.headline, listeningOn, listening, onListeningChange)
+            ui.garmin?.let { GarminCard(it, onPushNow = { PushWorker.pushNow(appContext) }) }
             ui.live?.let { LiveCard(it) }
             val latest = ui.latest
             if (latest != null) LatestWeighInCard(latest) else EmptyCard()
-            ui.garmin?.let { GarminCard(it, onPushNow = { PushWorker.pushNow(appContext) }) }
             if (ui.recent.isNotEmpty()) RecentSection(ui.recent, onSeeAll = onOpenHistory)
         }
     }
@@ -269,8 +269,13 @@ private fun LatestWeighInCard(latest: LatestCard) {
  */
 @Composable
 private fun GarminCard(line: GarminLine, onPushNow: () -> Unit) {
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+    // Same filled surface as the listening card above it: the two read as
+    // one status block (scale, then Garmin).
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
