@@ -12,6 +12,7 @@ import com.xiaomiscalesync.proto.Profile
 import com.xiaomiscalesync.proto.ProfileJson
 import com.xiaomiscalesync.proto.ProtocolError
 import com.xiaomiscalesync.proto.ScaleSession
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -64,6 +65,7 @@ class SyncEngine(
     private val profile: Profile = Profile(),
     private val config: EngineConfig = EngineConfig(),
     private val clock: Clock = Clock.systemUTC(),
+    private val log: (String) -> Unit = {},
 ) {
 
     private val _state = MutableStateFlow(EngineState())
@@ -216,9 +218,20 @@ class SyncEngine(
                 session.hello()
                 collected += collect(session)
                 return SyncResult(SyncKind.OK, attempts, collected)
-            } catch (_: ProtocolError) {
+            } catch (e: ProtocolError) {
                 // Silence or a refused status: the next attempt reconnects
                 // from scratch — the scale does not survive a half session.
+                // Logged (message only, never key material) so a silent scale
+                // is diagnosable from the log pane: this catch is where the
+                // milestone-0 PROP-direction bug spent its reasons.
+                log("sync attempt $attempts/$config.maxAttempts failed: ${e.message}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // Anything else is not retryable in-session; it fails the sync
+                // outright rather than burning every attempt on the same error.
+                log("sync attempt $attempts aborted: ${e::class.simpleName}: ${e.message}")
+                return SyncResult(SyncKind.FAILED, attempts, collected)
             } finally {
                 runCatching { session.close() }
             }

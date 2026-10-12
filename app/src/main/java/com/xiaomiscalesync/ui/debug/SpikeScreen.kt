@@ -212,7 +212,7 @@ class SpikeController(private val appContext: Context) {
      * The engine under test: [openSession] supplies the real transport,
      * every trigger/gate/dedupe rule is the Task-9-tested one.
      */
-    private val engine = SyncEngine(repo, openSession = { openSession() })
+    private val engine = SyncEngine(repo, openSession = { openSession() }, log = ::log)
 
     /** Observable engine phase for the header line (Task 9's state flow). */
     val engineState: StateFlow<EngineState> = engine.state
