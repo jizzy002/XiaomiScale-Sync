@@ -2,9 +2,17 @@ package com.xiaomiscalesync.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,6 +31,7 @@ import com.xiaomiscalesync.data.Secrets
 import com.xiaomiscalesync.data.SettingsStore
 import com.xiaomiscalesync.ui.debug.SpikeController
 import com.xiaomiscalesync.ui.debug.SpikeScreen
+import com.xiaomiscalesync.ui.history.HistoryScreen
 import com.xiaomiscalesync.ui.main.MainScreen
 import com.xiaomiscalesync.ui.onboarding.GarminSso
 import com.xiaomiscalesync.ui.onboarding.MiCloudKeyExtractor
@@ -30,6 +39,7 @@ import com.xiaomiscalesync.ui.onboarding.OnboardingScreen
 import com.xiaomiscalesync.ui.onboarding.OnboardingStep
 import com.xiaomiscalesync.ui.onboarding.OnboardingViewModel
 import com.xiaomiscalesync.ui.onboarding.WizardAnswers
+import com.xiaomiscalesync.ui.theme.AppIcons
 import com.xiaomiscalesync.xiaomi.MiCloudClient
 import okhttp3.OkHttpClient
 
@@ -119,17 +129,21 @@ private val wizardSaver: Saver<WizardAnswers?, Any> = listSaver(
     },
 )
 
+/** The two bottom-bar destinations. */
+private enum class Tab(val label: String) { HOME("Home"), HISTORY("History") }
+
 /**
- * The Main destination: the weighing screen (Task 15). The milestone-0
- * debug spike stays reachable from its "Debug" button (opened on demand,
- * so its controller only spins up when actually used; system back
- * returns to Main). Main's scan stops while the spike is shown — the two
- * never listen at once.
+ * The Main destination: Home (the weighing screen, Task 15) and History
+ * (Task 16) behind a bottom navigation bar. Home scans only while it is
+ * the visible tab (spec: no listening off-screen). The milestone-0 debug
+ * spike stays reachable from Home's overflow menu (opened on demand, so
+ * its controller only spins up when used; system back returns).
  */
 @Composable
 private fun MainRoute() {
     val appContext = LocalContext.current.applicationContext
     var showSpike by rememberSaveable { mutableStateOf(false) }
+    var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
 
     if (showSpike) {
         BackHandler { showSpike = false }
@@ -139,7 +153,39 @@ private fun MainRoute() {
         }
         // Debug screen has no Scaffold: keep it clear of the system bars.
         Box(Modifier.safeDrawingPadding()) { SpikeScreen(controller) }
-    } else {
-        MainScreen(onOpenDebug = { showSpike = true })
+        return
+    }
+
+    if (tab != Tab.HOME) BackHandler { tab = Tab.HOME }
+    Scaffold(
+        // Each tab's own Scaffold handles the top/status-bar insets.
+        contentWindowInsets = WindowInsets(0),
+        bottomBar = {
+            NavigationBar {
+                for (t in Tab.entries) {
+                    NavigationBarItem(
+                        selected = tab == t,
+                        onClick = { tab = t },
+                        icon = {
+                            Icon(
+                                if (t == Tab.HOME) AppIcons.Home else AppIcons.History,
+                                contentDescription = null,
+                            )
+                        },
+                        label = { Text(t.label) },
+                    )
+                }
+            }
+        },
+    ) { padding ->
+        Box(Modifier.padding(padding).consumeWindowInsets(padding)) {
+            when (tab) {
+                Tab.HOME -> MainScreen(
+                    onOpenDebug = { showSpike = true },
+                    onOpenHistory = { tab = Tab.HISTORY },
+                )
+                Tab.HISTORY -> HistoryScreen()
+            }
+        }
     }
 }

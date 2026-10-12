@@ -24,13 +24,14 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -54,6 +55,12 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.data.WeighInSource
 import com.xiaomiscalesync.sync.LiveReading
+import com.xiaomiscalesync.ui.theme.AppIcons
+import com.xiaomiscalesync.ui.theme.Pill
+import com.xiaomiscalesync.ui.theme.Tone
+import com.xiaomiscalesync.ui.theme.container
+import com.xiaomiscalesync.ui.theme.content
+import com.xiaomiscalesync.ui.theme.tone
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -70,7 +77,7 @@ import java.util.Locale
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(onOpenDebug: () -> Unit) {
+fun MainScreen(onOpenDebug: () -> Unit, onOpenHistory: () -> Unit = {}) {
     val graph = AppGraph.of(LocalContext.current)
     val scanner = graph.scanner
     val viewModel = remember(graph) {
@@ -118,7 +125,9 @@ fun MainScreen(onOpenDebug: () -> Unit) {
                 title = { Text("Scale Sync") },
                 actions = {
                     Box {
-                        TextButton(onClick = { menuOpen = true }) { Text("⋮", fontSize = 20.sp) }
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(AppIcons.More, contentDescription = "More")
+                        }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(
                                 text = { Text("Debug tools") },
@@ -148,7 +157,7 @@ fun MainScreen(onOpenDebug: () -> Unit) {
                     action = "Allow" to { launcher.launch(missing.toTypedArray()) },
                 )
             }
-            for (banner in ui.banners) BannerFor(banner)
+            for (banner in ui.banners) BannerFor(banner, onOpenHistory)
 
             StatusCard(ui.headline, listening)
             ui.live?.let { LiveCard(it) }
@@ -156,31 +165,6 @@ fun MainScreen(onOpenDebug: () -> Unit) {
             if (latest != null) LatestWeighInCard(latest) else EmptyCard()
         }
     }
-}
-
-/** Colour roles for pills/banners — all taken from the Material scheme. */
-private enum class Tone { PRIMARY, NEUTRAL, WARNING, ERROR }
-
-@Composable
-private fun Tone.container(): Color = when (this) {
-    Tone.PRIMARY -> MaterialTheme.colorScheme.primaryContainer
-    Tone.NEUTRAL -> MaterialTheme.colorScheme.surfaceVariant
-    Tone.WARNING -> MaterialTheme.colorScheme.tertiaryContainer
-    Tone.ERROR -> MaterialTheme.colorScheme.errorContainer
-}
-
-@Composable
-private fun Tone.content(): Color = when (this) {
-    Tone.PRIMARY -> MaterialTheme.colorScheme.onPrimaryContainer
-    Tone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
-    Tone.WARNING -> MaterialTheme.colorScheme.onTertiaryContainer
-    Tone.ERROR -> MaterialTheme.colorScheme.onErrorContainer
-}
-
-private fun StatusChip.tone(): Tone = when (this) {
-    StatusChip.PUSHED -> Tone.PRIMARY
-    StatusChip.QUEUED, StatusChip.SKIPPED_EXISTING, StatusChip.GUEST -> Tone.NEUTRAL
-    StatusChip.NEEDS_REVIEW -> Tone.WARNING
 }
 
 @Composable
@@ -295,27 +279,19 @@ private fun EmptyCard() {
     }
 }
 
-/** A non-interactive status label (assist chips look tappable; these are not). */
 @Composable
-private fun Pill(text: String, tone: Tone) {
-    Surface(color = tone.container(), contentColor = tone.content(), shape = RoundedCornerShape(50)) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-        )
-    }
-}
-
-@Composable
-private fun BannerFor(banner: Banner) = when (banner) {
+private fun BannerFor(banner: Banner, onReview: () -> Unit) = when (banner) {
     is Banner.Silence -> BannerCard(
         "Scale not heard for ${banner.hours} hours. If its Bluetooth icon stays solid when you " +
             "step on, take the batteries out for 10 seconds.",
         tone = Tone.WARNING,
     )
     Banner.AuthRequired -> BannerCard("Garmin sign-in expired — re-login in Settings", tone = Tone.ERROR)
-    Banner.NeedsReview -> BannerCard("Someone else weighed in — review", tone = Tone.WARNING)
+    Banner.NeedsReview -> BannerCard(
+        "Someone else weighed in.",
+        tone = Tone.WARNING,
+        action = "Review" to onReview,
+    )
 }
 
 @Composable

@@ -63,6 +63,9 @@ class WeighInRepository(
     suspend fun queueScaleCleanup(recordNos: List<Long>) =
         dao.queueCleanup(recordNos.map { ScaleCleanupItem(recordNo = it) })
 
+    /** Peeks at the scale-cleanup queue without draining it (history UI: "queued for next sync"). */
+    suspend fun queuedScaleCleanup(): List<Long> = dao.queuedCleanup().map { it.recordNo }
+
     /** Drains the scale-cleanup queue: each record number is handed out exactly once. */
     suspend fun takeScaleCleanup(): List<Long> = dao.takeScaleCleanup()
 }
