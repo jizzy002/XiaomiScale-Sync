@@ -89,8 +89,11 @@ class GarminNetworkError(val path: String, cause: IOException) :
 class GarminClient(
     private val http: OkHttpClient,
     private val store: TokenStore,
-    /** Supplies the MFA code for a challenge; receives the method Garmin used. */
-    private val mfa: (method: String) -> String,
+    /**
+     * Supplies the MFA code for a challenge; receives the method Garmin used.
+     * Suspending so a UI prompt (Compose) plugs in without `runBlocking`.
+     */
+    private val mfa: suspend (method: String) -> String,
     private val ssoBaseUrl: String = "https://sso.garmin.com",
     private val connectApiBaseUrl: String = "https://connectapi.garmin.com",
     private val diAuthBaseUrl: String = "https://diauth.garmin.com",
@@ -224,6 +227,15 @@ class GarminClient(
      * `/mobile/api/mfa/verifyCode`; if that endpoint refuses (the reference
      * notes the two endpoints live in different rate-limit buckets), retry
      * once on `/portal/api/mfa/verifyCode`. Returns the new service ticket.
+     *
+     * **Controller-ruled login-flow exception** to the "never retry 429"
+     * rule (which binds strictly on the weight-service API paths): after a
+     * 429 on the mobile endpoint exactly one extra request may go to the
+     * portal endpoint — the two buckets are independent, and this exact flow
+     * is proven working for this account. Bounded at one fallback request;
+     * both limited → typed [GarminRateLimited]. Pinned by
+     * `mfaFallsBackToThePortalBucketWhenMobileIsRateLimited` and
+     * `mfaSurfacesRateLimitedWhenBothBucketsAreRateLimited`.
      */
     private suspend fun verifyMfa(method: String): String {
         val code = mfa(method)
@@ -276,8 +288,18 @@ class GarminClient(
     /**
      * The reference's `_exchange_service_ticket`: walk [DI_CLIENT_IDS] with
      * `Basic base64(clientId:)` auth until Garmin mints a DI token, then
-     * persist it. 429 propagates (never retried); any other refusal moves on
-     * to the next client id.
+     * persist it. 429 propagates (never retried); any other refusal — a 401
+     * included — moves on to the next client id.
+     *
+     * **Controller-ruled login-flow exception** to the "never retry 401"
+     * rule (which binds strictly on the weight-service API paths): the DI
+     * token endpoint answers per client id, so a 401 for one id says nothing
+     * about the others, and this exact flow is proven working for this
+     * account. Bounded by [DI_CLIENT_IDS] — at most 4 POSTs, one attempt
+     * each (`unauthorizedIsFatal = false`, so `execute` itself never retries
+     * a 401) — then a typed [GarminAuthError]. Pinned by
+     * `tokenExchangeWalksEveryClientIdThenSurfacesTypedError` and
+     * `tokenExchangeStopsAtTheFirstAcceptedClientId`.
      */
     private suspend fun exchangeServiceTicket(ticket: String, serviceUrl: String) {
         for (clientId in DI_CLIENT_IDS) {
@@ -446,6 +468,19 @@ class GarminClient(
      * queue must stop); 5xx and network failures → up to [MAX_ATTEMPTS]
      * attempts with injected backoff, typed [GarminNetworkError] /
      * [GarminApiError] once exhausted.
+     *
+     * The never-retry-401/429 rule binds strictly on the **weight-service
+     * API paths** (reads and writes: exactly one request, tested). The
+     * **sign-in flow** carries two controller-ruled bounded fallbacks that
+     * are exceptions to it — the DI client-id walk ([exchangeServiceTicket],
+     * which calls this with [unauthorizedIsFatal] = false) and the MFA
+     * dual-bucket ([verifyMfa], which catches a typed 429 to try the second
+     * endpoint once). Both are bounded and pinned by request-count tests;
+     * this function itself never retries a 401 or 429 on any path.
+     *
+     * @param unauthorizedIsFatal false lets a caller (the DI client-id walk)
+     * receive a 401 response instead of an exception, so it can move on to
+     * the next client id. Exactly one request is made either way.
      */
     private fun execute(
         builder: Request.Builder,

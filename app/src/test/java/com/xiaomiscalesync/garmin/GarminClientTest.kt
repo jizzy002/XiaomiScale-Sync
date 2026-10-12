@@ -6,6 +6,7 @@ import java.time.ZonedDateTime
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
@@ -46,10 +47,13 @@ import org.junit.Test
  * - Writes: `POST /weight-service/user-weight` with the payload pinned by the
  *   plan's Global Constraints (exact-JSON assertion below).
  *
- * Retry policy (plan/brief, stricter than the reference's own 401 refresh):
- * 401 → [GarminAuthError] and 429 → [GarminRateLimited] immediately (never
- * retried — the push queue must stop); 5xx/network → 3 attempts with 1–10 s
- * exponential backoff + jitter (backoff injected as a no-op here).
+ * Retry policy (plan/brief, scoped per the controller ruling): on the
+ * weight-service API paths 401 → [GarminAuthError] and 429 →
+ * [GarminRateLimited] immediately (exactly one request, never retried — the
+ * push queue must stop); 5xx/network → 3 attempts with 1–10 s exponential
+ * backoff + jitter (backoff injected as a no-op here). The sign-in flow's
+ * two controller-ruled bounded fallbacks (DI client-id walk, MFA
+ * dual-bucket) are pinned by the login-flow fallback bounds tests below.
  */
 class GarminClientTest {
 
@@ -66,12 +70,18 @@ class GarminClientTest {
     private var mfaStatus = 200
     private var mfaBody =
         """{"responseStatus":{"type":"SUCCESSFUL"},"serviceTicketId":"ST-MFA"}"""
+    private var portalMfaStatus = 200
+    private var portalMfaBody =
+        """{"responseStatus":{"type":"SUCCESSFUL"},"serviceTicketId":"ST-PORTAL"}"""
     private var tokenStatus = 200
     private var tokenBody =
         """{"access_token":"NEW_ACCESS","refresh_token":"NEW_REFRESH","expires_in":3600}"""
 
     /** FIFO of answers for `/weight-service/…`; empty → 200 `{}`. */
     private val apiQueue = ArrayDeque<Pair<Int, String>>()
+
+    /** FIFO of answers for the DI token endpoint; empty → tokenStatus/tokenBody. */
+    private val tokenQueue = ArrayDeque<Pair<Int, String>>()
 
     private val now = 1_760_000_000_000L
     private val weighInTs = ZonedDateTime.parse("2026-10-11T07:15:42+02:00")
@@ -87,9 +97,11 @@ class GarminClientTest {
                     ?: return MockResponse().setResponseCode(400)
                 return when {
                     path == "/mobile/api/login" -> json(ssoStatus, ssoBody)
-                    path == "/mobile/api/mfa/verifyCode" ||
-                        path == "/portal/api/mfa/verifyCode" -> json(mfaStatus, mfaBody)
-                    path == "/di-oauth2-service/oauth/token" -> json(tokenStatus, tokenBody)
+                    path == "/mobile/api/mfa/verifyCode" -> json(mfaStatus, mfaBody)
+                    path == "/portal/api/mfa/verifyCode" -> json(portalMfaStatus, portalMfaBody)
+                    path == "/di-oauth2-service/oauth/token" ->
+                        if (tokenQueue.isEmpty()) json(tokenStatus, tokenBody)
+                        else tokenQueue.removeFirst().let { (code, body) -> json(code, body) }
                     path.startsWith("/weight-service/") ->
                         if (apiQueue.isEmpty()) json(200, "{}")
                         else apiQueue.removeFirst().let { (code, body) -> json(code, body) }
@@ -140,6 +152,14 @@ class GarminClientTest {
         checkNotNull(javaClass.classLoader?.getResourceAsStream(name)) {
             "missing test fixture $name"
         }.bufferedReader().use { it.readText() }
+
+    /** The DI client id an exchange request authenticated as (Basic header). */
+    private fun clientIdOf(request: RecordedRequest): String {
+        val decoded = String(
+            Base64.getDecoder().decode(request.getHeader("Authorization")!!.removePrefix("Basic ")),
+        )
+        return decoded.removeSuffix(":")
+    }
 
     // ------------------------------------------------------------- addWeighIn
 
@@ -475,6 +495,138 @@ class GarminClientTest {
             runBlocking { client().login("tester@example.com", "hunter2-secret") }
         }
         assertEquals(1, recorded.size)
+    }
+
+    // --------------------------------------- login-flow fallback bounds (ruling)
+
+    /**
+     * Controller-ruled login-flow exception (finding 1): a 401 on the DI
+     * token endpoint is walked past to the next client id — Garmin decides
+     * per client id — but the walk is bounded by [GarminClient.DI_CLIENT_IDS]
+     * (4 POSTs) and ends in a typed [GarminAuthError]. The weight-service
+     * API paths keep the strict never-retry-401 rule.
+     */
+    @Test
+    fun tokenExchangeWalksEveryClientIdThenSurfacesTypedError() {
+        tokenStatus = 401
+        tokenBody = """{"error":"unauthorized"}"""
+
+        assertThrows(GarminAuthError::class.java) {
+            runBlocking { client().login("tester@example.com", "hunter2-secret") }
+        }
+        val exchanges = recorded.filter {
+            it.requestUrl?.encodedPath == "/di-oauth2-service/oauth/token"
+        }
+        // Bounded: exactly one POST per client id, then the typed error.
+        assertEquals(GarminClient.DI_CLIENT_IDS.size, exchanges.size)
+        assertEquals(GarminClient.DI_CLIENT_IDS, exchanges.map { clientIdOf(it) })
+        // …and the SSO login itself ran exactly once (the walk never re-logins).
+        assertEquals(1, recorded.count { it.requestUrl?.encodedPath == "/mobile/api/login" })
+    }
+
+    /** The walk stops at the first client id Garmin accepts (third here). */
+    @Test
+    fun tokenExchangeStopsAtTheFirstAcceptedClientId() = runBlocking<Unit> {
+        tokenQueue += 401 to """{"error":"unauthorized"}"""
+        tokenQueue += 401 to """{"error":"unauthorized"}"""
+        tokenQueue += 200 to
+            """{"access_token":"THIRD_ACCESS","refresh_token":"THIRD_REFRESH","expires_in":3600}"""
+
+        client().login("tester@example.com", "hunter2-secret")
+
+        val exchanges = recorded.filter {
+            it.requestUrl?.encodedPath == "/di-oauth2-service/oauth/token"
+        }
+        assertEquals(3, exchanges.size)
+        assertEquals("GARMIN_CONNECT_MOBILE_ANDROID_DI", exchanges.last().let { clientIdOf(it) })
+        assertEquals("THIRD_ACCESS", store.tokens!!.accessToken)
+        assertEquals("THIRD_REFRESH", store.tokens!!.refreshToken)
+        assertEquals("GARMIN_CONNECT_MOBILE_ANDROID_DI", store.tokens!!.clientId)
+    }
+
+    /**
+     * Controller-ruled login-flow exception (finding 2): a 429 on the mobile
+     * MFA endpoint triggers exactly one extra request to the portal endpoint
+     * (separate Garmin rate-limit bucket), which completes the login here.
+     */
+    @Test
+    fun mfaFallsBackToThePortalBucketWhenMobileIsRateLimited() = runBlocking<Unit> {
+        ssoBody =
+            """{"responseStatus":{"type":"MFA_REQUIRED"},"customerMfaInfo":{"mfaLastMethodUsed":"sms"}}"""
+        mfaStatus = 429
+        mfaBody = """{"error":"too many requests"}"""
+
+        client().login("tester@example.com", "hunter2-secret")
+
+        assertEquals(
+            listOf(
+                "/mobile/api/login",
+                "/mobile/api/mfa/verifyCode",
+                "/portal/api/mfa/verifyCode",
+                "/di-oauth2-service/oauth/token",
+            ),
+            recorded.map { it.requestUrl!!.encodedPath },
+        )
+        // The portal bucket's ticket is the one exchanged.
+        assertTrue(recorded.last().body.clone().readUtf8().contains("service_ticket=ST-PORTAL"))
+        assertEquals("NEW_ACCESS", store.tokens!!.accessToken)
+    }
+
+    /** Both buckets 429 → [GarminRateLimited] after exactly one try each. */
+    @Test
+    fun mfaSurfacesRateLimitedWhenBothBucketsAreRateLimited() {
+        ssoBody =
+            """{"responseStatus":{"type":"MFA_REQUIRED"},"customerMfaInfo":{"mfaLastMethodUsed":"sms"}}"""
+        mfaStatus = 429
+        mfaBody = """{"error":"too many requests"}"""
+        portalMfaStatus = 429
+        portalMfaBody = """{"error":"too many requests"}"""
+
+        assertThrows(GarminRateLimited::class.java) {
+            runBlocking { client().login("tester@example.com", "hunter2-secret") }
+        }
+        assertEquals(
+            listOf(
+                "/mobile/api/login",
+                "/mobile/api/mfa/verifyCode",
+                "/portal/api/mfa/verifyCode",
+            ),
+            recorded.map { it.requestUrl!!.encodedPath },
+        )
+        // The prompt ran once; the dual-bucket never re-asks the user.
+        assertEquals(listOf("sms"), mfaPrompts.toList())
+    }
+
+    /**
+     * Finding 3: the [GarminClient] `mfa` seam is `suspend`, so a suspending
+     * UI prompt plugs in without `runBlocking`. The lambda below suspends
+     * (`delay`) — it only compiles against a suspend parameter.
+     */
+    @Test
+    fun mfaPromptSeamAcceptsSuspendingPrompts() = runBlocking<Unit> {
+        ssoBody =
+            """{"responseStatus":{"type":"MFA_REQUIRED"},"customerMfaInfo":{"mfaLastMethodUsed":"email"}}"""
+        val suspendingClient = GarminClient(
+            http = OkHttpClient(),
+            store = store,
+            mfa = { method ->
+                mfaPrompts.add(method)
+                delay(1) // suspends: proves the seam is suspend
+                "555123"
+            },
+            ssoBaseUrl = base(),
+            connectApiBaseUrl = base(),
+            diAuthBaseUrl = base(),
+            nowMillis = { now },
+            backoffMillis = { 0L },
+        )
+
+        suspendingClient.login("tester@example.com", "hunter2-secret")
+
+        assertEquals(listOf("email"), mfaPrompts.toList())
+        assertEquals("NEW_ACCESS", store.tokens!!.accessToken)
+        val verify = recorded.first { it.requestUrl!!.encodedPath == "/mobile/api/mfa/verifyCode" }
+        assertTrue(verify.body.clone().readUtf8().contains(""""mfaVerificationCode":"555123""""))
     }
 
     // ------------------------------------------------------------ token safety
