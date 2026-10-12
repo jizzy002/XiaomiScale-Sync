@@ -46,6 +46,10 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.5.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
+    // Garmin push queue (Task 12): one-shot, uniquely-named retry work.
+    // CoroutineWorker lives in the ktx artifact.
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
 }

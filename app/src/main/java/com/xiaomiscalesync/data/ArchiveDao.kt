@@ -48,6 +48,10 @@ interface ArchiveDao {
     @Query("UPDATE weigh_ins SET garminStatus = :status WHERE id IN (:ids)")
     suspend fun setGarminStatus(ids: List<Long>, status: GarminStatus)
 
+    /** One-write variant for the success path: status flip plus the push-time stamp. */
+    @Query("UPDATE weigh_ins SET garminStatus = :status, pushedAt = :pushedAt WHERE id IN (:ids)")
+    suspend fun setGarminStatusAt(ids: List<Long>, status: GarminStatus, pushedAt: Long)
+
     // --- scale-cleanup queue (explicit user action; never automatic) -----------
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)

@@ -55,6 +55,10 @@ class WeighInRepository(
 
     suspend fun setGarminStatus(ids: List<Long>, s: GarminStatus) = dao.setGarminStatus(ids, s)
 
+    /** Marks rows PUSHED and stamps [pushedAt] (unix seconds) in one write. */
+    suspend fun markPushed(ids: List<Long>, pushedAt: Long) =
+        dao.setGarminStatusAt(ids, GarminStatus.PUSHED, pushedAt)
+
     /** Enqueues scale-memory record numbers for the next session's action 6.2. */
     suspend fun queueScaleCleanup(recordNos: List<Long>) =
         dao.queueCleanup(recordNos.map { ScaleCleanupItem(recordNo = it) })

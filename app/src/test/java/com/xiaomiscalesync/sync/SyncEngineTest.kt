@@ -153,6 +153,12 @@ class SyncEngineTest {
             rows.value = rows.value.map { if (it.id in ids) it.copy(garminStatus = status) else it }
         }
 
+        override suspend fun setGarminStatusAt(ids: List<Long>, status: GarminStatus, pushedAt: Long) {
+            rows.value = rows.value.map {
+                if (it.id in ids) it.copy(garminStatus = status, pushedAt = pushedAt) else it
+            }
+        }
+
         override suspend fun queueCleanup(items: List<ScaleCleanupItem>) {
             val known = scaleCleanup.value.toMutableSet()
             scaleCleanup.value = scaleCleanup.value + items.filter { known.add(it.recordNo) }.map { it.recordNo }

@@ -84,9 +84,11 @@ class GarminNetworkError(val path: String, cause: IOException) :
  *
  * Injectable seams for tests: [ssoBaseUrl], [connectApiBaseUrl],
  * [diAuthBaseUrl] (the request targets; canonical Garmin URLs stay in query
- * parameters and form fields), [nowMillis], [backoffMillis].
+ * parameters and form fields), [nowMillis], [backoffMillis]. The class is
+ * `open` with `open` weigh-in methods so the push-queue tests (Task 12) can
+ * script a JVM fake without HTTP; sign-in stays final (wire-tested instead).
  */
-class GarminClient(
+open class GarminClient(
     private val http: OkHttpClient,
     private val store: TokenStore,
     /**
@@ -380,7 +382,7 @@ class GarminClient(
      * `GET /weight-service/weight/range/<date>/<date>?includeAll=True`).
      * An empty day is an empty list, never an error.
      */
-    suspend fun weighInsOn(date: LocalDate): List<GarminWeighIn> =
+    open suspend fun weighInsOn(date: LocalDate): List<GarminWeighIn> =
         withContext(Dispatchers.IO) {
             val tokens = authenticated()
             val url = "$connectApiBaseUrl/weight-service/weight/range/$date/$date"
@@ -420,7 +422,7 @@ class GarminClient(
      * the weight in kg. Re-uploading the same timestamp/value is how Garmin
      * behaves — dedupe stays on our side.
      */
-    suspend fun addWeighIn(weightGrams: Int, localTs: ZonedDateTime) {
+    open suspend fun addWeighIn(weightGrams: Int, localTs: ZonedDateTime) {
         withContext(Dispatchers.IO) {
             val tokens = authenticated()
             val payload = JsonObject().apply {
