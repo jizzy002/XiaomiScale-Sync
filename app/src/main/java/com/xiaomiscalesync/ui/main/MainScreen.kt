@@ -244,17 +244,14 @@ private fun LatestWeighInCard(latest: LatestCard) {
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            WeightText(latest.weightGrams, 48)
+            WeightText(latest.weightGrams, 48, deltaGrams = latest.deltaGrams)
             Text(
                 "${time(latest.recordedAt)} · ${sourceLabel(latest.source)}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.size(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Pill(latest.chip.label, latest.chip.tone())
-                latest.deltaGrams?.let { Pill("${delta(it)} since last", Tone.NEUTRAL) }
-            }
+            Pill(latest.chip.label, latest.chip.tone())
         }
     }
 }
@@ -305,7 +302,7 @@ private fun delta(grams100: Int): String {
 
 /** `84.20` large with a smaller `kg` on the same baseline. */
 @Composable
-private fun WeightText(weight100: Int, sizeSp: Int) {
+private fun WeightText(weight100: Int, sizeSp: Int, deltaGrams: Int? = null) {
     Row(verticalAlignment = Alignment.Bottom) {
         Text(kg(weight100), fontSize = sizeSp.sp, fontWeight = FontWeight.SemiBold)
         Text(
@@ -313,6 +310,16 @@ private fun WeightText(weight100: Int, sizeSp: Int) {
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(bottom = (sizeSp / 6).dp),
         )
+        // Change vs the previous weigh-in, on the same baseline: short, never wraps.
+        deltaGrams?.let {
+            Text(
+                "  ${delta(it)}",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.padding(bottom = (sizeSp / 6).dp),
+            )
+        }
     }
 }
 

@@ -143,6 +143,38 @@ class ProfileViewModelTest {
     }
 
     @Test
+    fun memberIdMustBeAPositiveNumber() = runBlocking {
+        for (bad in listOf("abc", "0", "-3", "1.5")) {
+            val h = Harness()
+            h.vm.load()
+            h.vm.setHeightCm("176")
+            h.vm.setAge("41")
+            h.vm.setMid(bad)
+
+            h.vm.saveProfile()
+
+            assertNotNull("'$bad' must be rejected", h.vm.state.value.error)
+            assertNull("nothing written for '$bad'", h.settings.s.heightCm)
+            assertEquals(Settings.DEFAULT_MID, h.settings.s.mid)
+        }
+    }
+
+    @Test
+    fun blankMemberIdSavesAsOne() = runBlocking {
+        val h = Harness(settings = MemorySettings(Settings.DEFAULT.copy(onboarded = true, mid = "7")))
+        h.vm.load()
+        h.vm.setHeightCm("176")
+        h.vm.setAge("41")
+        h.vm.setMid("  ")
+
+        h.vm.saveProfile()
+
+        assertNull(h.vm.state.value.error)
+        assertEquals("1", h.settings.s.mid)
+        assertEquals("1", h.vm.state.value.mid)
+    }
+
+    @Test
     fun loadShowsSavedAnswersAndAccounts() = runBlocking {
         val h = Harness(
             settings = MemorySettings(

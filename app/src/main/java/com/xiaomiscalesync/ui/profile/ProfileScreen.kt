@@ -50,6 +50,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.xiaomiscalesync.AppGraph
+import com.xiaomiscalesync.data.Settings
 import com.xiaomiscalesync.data.ThemeMode
 import com.xiaomiscalesync.garmin.GarminAuthError
 import com.xiaomiscalesync.ui.debug.CodePrompt
@@ -97,6 +98,7 @@ fun ProfileScreen(onOpenDebug: () -> Unit) {
 
     var miDialog by remember { mutableStateOf(false) }
     var garminDialog by remember { mutableStateOf(false) }
+    var advancedOpen by remember { mutableStateOf(false) }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Profile") }) }) { padding ->
         Column(
@@ -182,14 +184,31 @@ fun ProfileScreen(onOpenDebug: () -> Unit) {
                     FilterChip(selected = state.sex == 1, onClick = { viewModel.setSex(1) }, label = { Text("Male") })
                     FilterChip(selected = state.sex == 2, onClick = { viewModel.setSex(2) }, label = { Text("Female") })
                 }
-                OutlinedTextField(
-                    value = state.mid,
-                    onValueChange = viewModel::setMid,
-                    label = { Text("Member ID") },
-                    supportingText = { Text("Copy XIAOMI_PROFILE_MEMBER_ID from an existing setup; default 1") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                // Member ID is advanced-only (owner ruling 2026-10-13): a wrong
+                // value silently routes every weigh-in to Needs review.
+                TextButton(onClick = { advancedOpen = !advancedOpen }) {
+                    Text(if (advancedOpen) "Advanced ▾" else "Advanced ▸")
+                }
+                if (advancedOpen) {
+                    Text(
+                        "Leave this at 1. Only change it if you're moving from an older setup that used " +
+                            "a different XIAOMI_PROFILE_MEMBER_ID. A wrong value sends your weigh-ins to " +
+                            "Needs review instead of Garmin.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = state.mid,
+                            onValueChange = viewModel::setMid,
+                            label = { Text("Member ID") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { viewModel.setMid(Settings.DEFAULT_MID) }) { Text("Reset to 1") }
+                    }
+                }
                 FilledTonalButton(onClick = { scope.launch { viewModel.saveProfile() } }) { Text("Save profile") }
             }
 

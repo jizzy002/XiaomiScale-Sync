@@ -277,7 +277,7 @@ private fun MiKeysStep(
 
 // -------------------------------------------------------------- step 2
 
-/** Step 2 — profile: height cm, age, sex, unit (fixed kg v1), Member ID. */
+/** Step 2 — profile: height cm, age, sex, unit (fixed kg v1). */
 @Composable
 private fun ProfileStep(state: OnboardingState, viewModel: OnboardingViewModel) {
     OutlinedTextField(
@@ -322,18 +322,9 @@ private fun ProfileStep(state: OnboardingState, viewModel: OnboardingViewModel) 
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    OutlinedTextField(
-        value = state.mid,
-        onValueChange = viewModel::setMid,
-        label = { Text("Member ID") },
-        singleLine = true,
-        enabled = !state.busy,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        supportingText = {
-            Text("Copy XIAOMI_PROFILE_MEMBER_ID from an existing setup. Default 1.")
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
+    // No Member ID here (owner ruling 2026-10-13): a wrong value silently
+    // sends every weigh-in to Needs review. The wizard always uses the
+    // default "1"; migrating users change it under Profile → Advanced.
 
     StepFooter(
         backEnabled = !state.busy,

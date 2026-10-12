@@ -47,7 +47,7 @@ The wizard walks you through five steps:
    app shows a dialog for it. Already have the keys from another tool? Use
    **I already have the keys** and paste them.
 2. **Profile.** Height, age and sex (sent to the scale so it can recognise
-   you), and the **Member ID** (default `1`).
+   you).
 3. **History question.** See "Coming from a previous setup" below.
 4. **Garmin Connect.** Sign in (with the MFA code if Garmin asks). Only
    Garmin's sign-in tokens are kept; your password is never stored.
@@ -70,9 +70,10 @@ weigh-ins to Garmin:
   time, or the same date and the same weight.
 - **Retire the old script** once the app is working, so only one thing
   talks to the scale. Two clients connecting to the scale can fight over it.
-- **Member ID:** if your old setup used `XIAOMI_PROFILE_MEMBER_ID`, enter the
-  same value on the Profile step so the scale keeps attributing weigh-ins to
-  you.
+- **Member ID:** the app always uses `1`, which is right for almost
+  everyone. Only if your old setup used a different
+  `XIAOMI_PROFILE_MEMBER_ID`, enter that value under Profile → *Advanced*.
+  A wrong value sends your weigh-ins to *Needs review* instead of Garmin.
 - **The app never deletes weigh-ins from the scale** (like a `KEEP_ON_SCALE`
   setting). So the scale re-sends its stored weigh-ins on every sync (the app
   ignores the repeats), and after an uncollected weigh-in it keeps asking to

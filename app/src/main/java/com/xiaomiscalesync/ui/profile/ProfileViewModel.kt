@@ -112,16 +112,20 @@ class ProfileViewModel(
         val st = _state.value
         val height = st.heightCm.trim().toIntOrNull()
         val age = st.age.trim().toIntOrNull()
+        val mid = st.mid.trim().ifBlank { Settings.DEFAULT_MID }
         val problem = when {
             height == null || height !in 50..250 -> "Height must be a number of cm (50–250)"
             age == null || age !in 5..120 -> "Age must be a number of years (5–120)"
+            // The archive compares numerically (WeighInRepository: toLongOrNull);
+            // anything else would silently become "1" there while showing
+            // something different here.
+            mid.toLongOrNull()?.let { it > 0 } != true -> "Member ID must be a whole number (normally 1)"
             else -> null
         }
         if (problem != null) {
             update { it.copy(error = problem, message = null) }
             return
         }
-        val mid = st.mid.trim().ifBlank { Settings.DEFAULT_MID }
         settings.setProfile(heightCm = height!!, age = age!!, sex = st.sex)
         settings.setMid(mid)
         update { it.copy(mid = mid, error = null, message = "Profile saved — sent to the scale on the next sync") }
