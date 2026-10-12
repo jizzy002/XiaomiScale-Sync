@@ -367,7 +367,7 @@ class ScaleSession(
             appCtr += 1
             val value = encryptValue(k.appKey, k.appIv, ctr, plaintext)
             try {
-                Framing.sendValue(sendTransport, CharId.CMD, TAG_SESSION, value, maxValue)
+                Framing.sendValue(sendTransport, CharId.CMD, TAG_DATA, value, maxValue)
             } catch (e: Throwable) {
                 // A half-dead transfer can leave an ack in flight — on CMD,
                 // where this send's acks arrive, or in the pump's PROP sink.
@@ -450,8 +450,14 @@ class ScaleSession(
         private val LOGIN_OK = hex("21000000")
         private val LOGIN_INFO = "mible-login-info".toByteArray(Charsets.US_ASCII)
 
-        /** The framing tag session values use (app→scale on CMD, scale→app on PROP). */
-        private const val TAG_SESSION = 0x01
+        /**
+         * The framing tag of encrypted session values in both directions —
+         * the reference's `TAG_DATA = 0x00`, used as
+         * `send_value("CMD", TAG_DATA, payload)`; the protocol README's
+         * framing section lists the same ("0x00 encrypted data (CMD/PROP)").
+         * There is no tag 0x01 in the protocol.
+         */
+        private const val TAG_DATA = 0x00
 
         /** MIoT service ids the pump routes events by. */
         private const val SIID_LIVE = 5

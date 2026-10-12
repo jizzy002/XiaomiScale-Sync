@@ -316,8 +316,8 @@ class FakeScale(
                     // request() sends with send_value("CMD", …). A framed
                     // value on PROP is a direction bug, not a frame.
                     CharId.CMD -> {
-                        val (_, data) = receiveFramed(t, char, frame)
-                        handleSessionValue(t, data)
+                        val (tag, data) = receiveFramed(t, char, frame)
+                        handleSessionValue(t, tag, data)
                     }
 
                     // Framing-layer values below the session (FramingTest's
@@ -384,13 +384,21 @@ class FakeScale(
     }
 
     /**
-     * One encrypted session value from the app on CMD: decrypt it with
+     * One encrypted session value from the app on CMD: the framing tag
+     * must be the protocol's data tag `0x00` ("Tags: 0x00 encrypted data
+     * (CMD/PROP)"; reference `TAG_DATA = 0x00`) — anything else is
+     * rejected, which tag-pins every session test. Then decrypt it with
      * the app-side keys (CTR from the value's frame) and answer — OP_HELLO
      * echo, action 7.1 (profile), 6.1 (fetch stored), 6.2 (delete).
      * The answers go back on PROP (the scale's direction) via
      * [replySession].
      */
-    private suspend fun handleSessionValue(t: BleTransport, data: ByteArray) {
+    private suspend fun handleSessionValue(t: BleTransport, tag: Int, data: ByteArray) {
+        if (tag != TAG_DATA) {
+            throw ProtocolError(
+                "scale expected the session data tag 0x00 on CMD, got tag 0x%02x".format(tag),
+            )
+        }
         val k = keys ?: throw ProtocolError("scale got a session value before login")
         appCounters += u16(data, 0)
         val msg = MiotCodec.decode(ScaleSession.decryptValue(k.appKey, k.appIv, data))
@@ -470,7 +478,7 @@ class FakeScale(
         val k = keys ?: throw ProtocolError("scale has no session keys")
         val value = ScaleSession.encryptValue(k.devKey, k.devIv, devCtr, MiotCodec.encode(tid, op, body))
         devCtr += 1
-        sendFramed(CharId.PROP, TAG_SESSION, value)
+        sendFramed(CharId.PROP, TAG_DATA, value)
     }
 
     /**
@@ -619,8 +627,8 @@ class FakeScale(
         const val TAG_REMOTE_KEY = 0x0d
         const val TAG_LOGIN_INFO = 0x0a
 
-        /** The framing tag session values use (app→scale on CMD, scale→app on PROP). */
-        const val TAG_SESSION = 0x01
+        /** The framing tag of encrypted session values (reference `TAG_DATA = 0x00`). */
+        const val TAG_DATA = 0x00
 
         /** First tid the scale uses for its own events. */
         const val EVENT_TID_BASE = 0x7000

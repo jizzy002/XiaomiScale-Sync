@@ -112,16 +112,26 @@ class ScaleSessionChannelTest {
 
         val appWrites = appEnd.wire.events.filter { it.fromFirst }
         // The framing headers of the two session sends: 6 bytes,
-        // `00 00 00 <tag 0x01>` (the session tag) + parcel count.
+        // `00 00 00 <tag> <count:le16>` — the app writes framed values only
+        // to CMD (session requests) or PROP (framing acks, 4 bytes), so a
+        // size-6 header on either char is a session request wherever it went.
         val headers = appWrites.filter {
-            it.bytes.size == 6 && it.bytes[0] == 0.toByte() && it.bytes[1] == 0.toByte() &&
-                it.bytes[2] == 0.toByte() && it.bytes[3] == 0x01.toByte()
+            (it.char == CharId.CMD || it.char == CharId.PROP) && it.bytes.size == 6 &&
+                it.bytes[0] == 0.toByte() && it.bytes[1] == 0.toByte() && it.bytes[2] == 0.toByte()
         }
         assertEquals("one session header per request", 2, headers.size)
         assertTrue(
             "session request headers written to ${headers.map { it.char }}, expected CMD " +
                 "(reference: app→scale values go on CMD 0x001a)",
             headers.all { it.char == CharId.CMD },
+        )
+        // …carrying the protocol's data tag: "Tags: 0x00 encrypted data
+        // (CMD/PROP)" — reference scale_reader.py `TAG_DATA = 0x00`, used
+        // as `send_value("CMD", TAG_DATA, payload)`. No tag 0x01 exists.
+        assertTrue(
+            "session data tags ${headers.map { "%02x".format(it.bytes[3]) }}, expected 0x00 " +
+                "(reference TAG_DATA = 0x00)",
+            headers.all { it.bytes[3] == 0x00.toByte() },
         )
 
         // On PROP the app may only ever write the framing acks of the
