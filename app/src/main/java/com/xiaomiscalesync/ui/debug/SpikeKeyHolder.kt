@@ -3,6 +3,7 @@ package com.xiaomiscalesync.ui.debug
 import android.content.SharedPreferences
 import com.xiaomiscalesync.garmin.GarminTokens
 import com.xiaomiscalesync.garmin.TokenStore
+import java.util.Locale
 
 /**
  * Milestone-0 key storage: a plain [SharedPreferences] stand-in for the
@@ -36,9 +37,22 @@ class SpikeKeyHolder(private val prefs: SharedPreferences) {
         fun isHex(value: String?, length: Int): Boolean =
             value != null && value.length == length &&
                 value.all { it in "0123456789abcdefABCDEF" }
+
+        /**
+         * Canonical MAC form (uppercase, colon-separated) — what
+         * `BluetoothDevice.address` and `BluetoothAdapter.getRemoteDevice`
+         * both use. [isMac] accepts bare/dash hex for input convenience;
+         * normalizing once at the single write path guarantees the stored
+         * value can never break the scan-equals check or `getRemoteDevice`.
+         */
+        fun normalizeMac(value: String): String =
+            value.filter { it.isLetterOrDigit() }
+                .uppercase(Locale.US)
+                .chunked(2)
+                .joinToString(":")
     }
 
-    /** The scale's MAC (`AA:BB:…` or bare hex), or null before extraction. */
+    /** The scale's MAC (canonical `AA:BB:…` form), or null before extraction. */
     var mac: String? = prefs.getString(KEY_MAC, null)
         private set
 
@@ -53,20 +67,26 @@ class SpikeKeyHolder(private val prefs: SharedPreferences) {
     /**
      * Persists the extracted keys after validating them.
      *
-     * @throws IllegalArgumentException with a message naming the bad field
-     *   when the MAC or TOKEN is malformed (the BLE KEY may be null — the
-     *   session path works without it; only broadcast capture degrades).
+     * The MAC is normalized to the canonical `AA:BB:CC:DD:EE:FF` form here —
+     * the only write path — so downstream scan-equals / `getRemoteDevice`
+     * calls always see the platform's own format.
+     *
+     * @throws IllegalArgumentException with a field-level message (never
+     *   echoing the value) when the MAC or TOKEN is malformed (the BLE KEY
+     *   may be null — the session path works without it; only broadcast
+     *   capture degrades).
      */
     fun save(mac: String, tokenHex: String?, bleKeyHex: String?) {
-        require(isMac(mac)) { "MAC is not 6 bytes of hex: '$mac'" }
+        require(isMac(mac)) { "MAC malformed: expected 6 bytes of hex" }
         require(isHex(tokenHex, 24)) { "TOKEN is not 24 hex characters" }
         require(bleKeyHex == null || isHex(bleKeyHex, 32)) { "BLE KEY is not 32 hex characters" }
+        val normalizedMac = normalizeMac(mac)
         prefs.edit()
-            .putString(KEY_MAC, mac)
+            .putString(KEY_MAC, normalizedMac)
             .putString(KEY_TOKEN, tokenHex)
             .putString(KEY_BLE_KEY, bleKeyHex)
             .apply()
-        this.mac = mac
+        this.mac = normalizedMac
         this.tokenHex = tokenHex
         this.bleKeyHex = bleKeyHex
     }

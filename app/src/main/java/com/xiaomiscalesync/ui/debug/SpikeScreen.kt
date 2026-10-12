@@ -4,7 +4,6 @@ import android.Manifest
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
@@ -86,12 +85,14 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -321,7 +322,13 @@ class SpikeController(private val appContext: Context) {
         }
         val callback = buildScanCallback()
         try {
-            bleScanner.startScan(listOf(SERVICE_FILTER), SCAN_SETTINGS, callback)
+            // Deliberately unfiltered: SDK 37 offers no presence-only
+            // service-data ScanFilter (`setServiceUuid` matches the Service-
+            // UUID *list* AD type, which the scale may not carry, and
+            // `setServiceDataUuid` is gone from the SDK). Filtering for
+            // 0xfe95 service data in [buildScanCallback] instead means a
+            // filter quirk can never drop every scale packet.
+            bleScanner.startScan(emptyList(), SCAN_SETTINGS, callback)
         } catch (e: SecurityException) {
             log("scan denied: ${e.message}")
             return
@@ -353,6 +360,11 @@ class SpikeController(private val appContext: Context) {
 
     private fun buildScanCallback() = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            // Presence match, in code: only 0xfe95 *service data* frames (AD
+            // type 0x16) are the scale — the same bytes BeaconDecoder reads.
+            // SDK 37 exposes service data through the scan record only
+            // (ScanResult.getServiceData was dropped from the public API).
+            val serviceData = result.scanRecord?.getServiceData(SERVICE_PARCEL) ?: return
             val address = result.device?.address ?: return
             val mac = keys.mac
             if (mac != null && !address.equals(mac, ignoreCase = true)) return
@@ -366,15 +378,13 @@ class SpikeController(private val appContext: Context) {
             }
             if (mac == null) return // keys not extracted yet: visibility only
 
-            // SDK 37 exposes service data through the scan record only
-            // (ScanResult.getServiceData was dropped from the public API).
-            val serviceData = result.scanRecord?.getServiceData(SERVICE_PARCEL) ?: return
             val bleKey = keys.bleKeyHex?.let(::hexToBytes)
             val beacon = try {
                 BeaconDecoder.decode(serviceData, mac, bleKey)
             } catch (e: IllegalArgumentException) {
-                // Task 7 note: a malformed stored MAC throws here — surfaced, not swallowed.
-                log("beacon decode failed: ${e.message}")
+                // Task 7 note: a malformed stored MAC throws here — surfaced,
+                // not swallowed, and sanitized (the message may embed it).
+                log("beacon decode failed: ${sanitize(e.message)}")
                 return
             } ?: return
             val weighIn = beacon.objects
@@ -440,7 +450,7 @@ class SpikeController(private val appContext: Context) {
         try {
             keys.save(device.mac, device.tokenHex, device.bleKeyHex)
         } catch (e: IllegalArgumentException) {
-            log("scale found but keys rejected: ${e.message}")
+            log("scale found but keys rejected: ${sanitize(e.message)}")
             return@runOperation
         }
         refreshKeyStatus()
@@ -532,11 +542,25 @@ class SpikeController(private val appContext: Context) {
             val adapter = adapterOrNull() ?: throw IllegalStateException("no Bluetooth adapter")
             log("connecting to ${maskMac(mac)} …")
             val transport = AndroidTransport.connect(adapter.getRemoteDevice(mac), appContext, ::log)
-            ScaleSession(transport, hexToBytes(tokenHex), ::log)
+            try {
+                ScaleSession(transport, hexToBytes(tokenHex), ::log)
+            } catch (c: CancellationException) {
+                // A connected GATT must not leak if session setup is cancelled.
+                withContext(NonCancellable) { runCatching { transport.close() } }
+                throw c
+            } catch (t: Throwable) {
+                // ditto when the constructor itself throws after connect succeeded
+                runCatching { transport.close() }
+                log(
+                    "session setup failed: " +
+                        sanitize(t.message).ifEmpty { t::class.java.simpleName },
+                )
+                null
+            }
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
-            log("connect failed: ${t.message ?: t::class.java.simpleName}")
+            log("connect failed: ${sanitize(t.message).ifEmpty { t::class.java.simpleName }}")
             null
         }
     }
@@ -616,10 +640,6 @@ class SpikeController(private val appContext: Context) {
         private val SERVICE_PARCEL =
             ParcelUuid(UUID.fromString(AndroidTransport.SERVICE_UUID))
 
-        private val SERVICE_FILTER = ScanFilter.Builder()
-            .setServiceUuid(SERVICE_PARCEL)
-            .build()
-
         private val SCAN_SETTINGS = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
@@ -632,6 +652,24 @@ class SpikeController(private val appContext: Context) {
                 if (i < 4) hex.substring(i * 2, i * 2 + 2) else "**"
             }
         }
+
+        /**
+         * Any MAC-shaped fragment in free text: the canonical colon/dash
+         * form, or a bare 12-hex word (word-bounded so a 24-hex TOKEN can
+         * never be mistaken for one).
+         */
+        private val MAC_IN_TEXT = Regex(
+            "(?:(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})" +
+                "|(?<![0-9A-Fa-f])[0-9A-Fa-f]{12}(?![0-9A-Fa-f])",
+        )
+
+        /**
+         * Exception text made safe for the log pane: error paths can echo
+         * the raw MAC we handed to `getRemoteDevice` — every MAC-shaped
+         * fragment is masked before logging.
+         */
+        fun sanitize(text: String?): String =
+            text?.replace(MAC_IN_TEXT) { maskMac(it.value) } ?: ""
 
         /** Validated hex → bytes (only ever fed [SpikeKeyHolder]-validated input). */
         fun hexToBytes(hex: String): ByteArray =
