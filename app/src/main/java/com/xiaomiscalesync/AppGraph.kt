@@ -87,8 +87,13 @@ class AppGraph private constructor(private val appContext: Context) {
      */
     private suspend fun handleBeacon(beacon: Beacon, weighIn: BroadcastWeighIn?) {
         if (!engine.onBeacon(beacon, weighIn)) return
-        engine.syncNow()
-        if (repo.pending().isNotEmpty()) PushWorker.enqueue(appContext)
+        val synced = engine.syncNow() != null
+        // Only a broadcast weigh-in or a sync that ran can add rows; the
+        // scale re-advertises for a while after each weighing, and queuing
+        // a pass per repeat stacked ~8 no-op workers on the device.
+        if ((weighIn != null || synced) && repo.pending().isNotEmpty()) {
+            PushWorker.enqueue(appContext)
+        }
     }
 
     /** Logcat only; every caller passes masked/sanitized text (no key material). */

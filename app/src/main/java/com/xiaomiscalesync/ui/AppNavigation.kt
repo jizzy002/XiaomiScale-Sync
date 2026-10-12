@@ -3,6 +3,7 @@ package com.xiaomiscalesync.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -136,7 +137,8 @@ private fun MainRoute() {
         DisposableEffect(controller) {
             onDispose { controller.dispose() }
         }
-        SpikeScreen(controller)
+        // Debug screen has no Scaffold: keep it clear of the system bars.
+        Box(Modifier.safeDrawingPadding()) { SpikeScreen(controller) }
     } else {
         MainScreen(onOpenDebug = { showSpike = true })
     }

@@ -440,7 +440,10 @@ open class GarminClient(
                     .headers(apiHeaders(tokens.accessToken)),
                 path = path,
             )
-            if (response.code != 200) throw GarminApiError(response.code, path)
+            // Any 2xx means stored: the live endpoint does not answer a bare
+            // 200 (device finding — a 200-only check turned every successful
+            // upload into a retry the duplicate guard then marked SKIPPED).
+            if (response.code !in 200..299) throw GarminApiError(response.code, path)
         }
     }
 

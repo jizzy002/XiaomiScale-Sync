@@ -21,6 +21,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -60,6 +63,7 @@ import kotlinx.coroutines.launch
  * the image renders at full dialog width with a 280 dp minimum (both
  * axes), fixing the owner's "too small" complaint.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OnboardingScreen(viewModel: OnboardingViewModel) {
     val state by viewModel.state.collectAsState()
@@ -67,50 +71,70 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
     val miPrompt = remember { CodePrompt() }
     val garminPrompt = remember { CodePrompt() }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Xiaomi Scale → Garmin", style = MaterialTheme.typography.titleLarge)
-        Text(
-            "Setup — step ${state.step.ordinal + 1} of 5",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (state.busy) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-        state.error?.let { message ->
-            Text(
-                message,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-
-        when (state.step) {
-            OnboardingStep.MI_KEYS ->
-                MiKeysStep(
-                    state,
-                    viewModel,
-                    scope,
-                    onCaptcha = { image, url -> miPrompt.askCaptcha(image, url) },
-                    onSecondFactor = { prompt -> miPrompt.ask(prompt) },
+    Scaffold(
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text("Set up Scale Sync")
+                            Text(
+                                "Step ${state.step.ordinal + 1} of ${OnboardingStep.entries.size} · " +
+                                    STEP_TITLES.getValue(state.step),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
                 )
-
-            OnboardingStep.PROFILE -> ProfileStep(state, viewModel)
-            OnboardingStep.HISTORY -> HistoryStep(state, viewModel)
-
-            OnboardingStep.GARMIN ->
-                GarminStep(state, viewModel, scope) { method ->
-                    garminPrompt.ask("Garmin MFA via $method — enter the emailed code")
-                        ?: throw GarminAuthError("Garmin MFA dialog cancelled")
+                if (state.busy) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(
+                        progress = { (state.step.ordinal + 1f) / OnboardingStep.entries.size },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
+            }
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            state.error?.let { message ->
+                Text(
+                    message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
 
-            OnboardingStep.DONE -> DoneStep(state, viewModel, scope)
+            when (state.step) {
+                OnboardingStep.MI_KEYS ->
+                    MiKeysStep(
+                        state,
+                        viewModel,
+                        scope,
+                        onCaptcha = { image, url -> miPrompt.askCaptcha(image, url) },
+                        onSecondFactor = { prompt -> miPrompt.ask(prompt) },
+                    )
+
+                OnboardingStep.PROFILE -> ProfileStep(state, viewModel)
+                OnboardingStep.HISTORY -> HistoryStep(state, viewModel)
+
+                OnboardingStep.GARMIN ->
+                    GarminStep(state, viewModel, scope) { method ->
+                        garminPrompt.ask("Garmin MFA via $method — enter the emailed code")
+                            ?: throw GarminAuthError("Garmin MFA dialog cancelled")
+                    }
+
+                OnboardingStep.DONE -> DoneStep(state, viewModel, scope)
+            }
         }
     }
 
@@ -121,6 +145,15 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
     }
     garminPrompt.prompt?.let { text -> CodeDialog(text) { code -> garminPrompt.submit(code) } }
 }
+
+/** Short names shown under the wizard's title bar. */
+private val STEP_TITLES = mapOf(
+    OnboardingStep.MI_KEYS to "Scale keys",
+    OnboardingStep.PROFILE to "Profile",
+    OnboardingStep.HISTORY to "History",
+    OnboardingStep.GARMIN to "Garmin",
+    OnboardingStep.DONE to "Done",
+)
 
 // -------------------------------------------------------------- step 1
 

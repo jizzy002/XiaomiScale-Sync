@@ -202,6 +202,25 @@ class GarminClientTest {
         assertEquals("application/json", request.getHeader("Accept"))
     }
 
+    /**
+     * Device finding (2026-10-13): the live endpoint accepted the upload
+     * with a non-200 2xx, the client threw, the worker retried and the
+     * guard then marked the row SKIPPED instead of PUSHED. Any 2xx is a
+     * stored weigh-in — exactly one request, no exception.
+     */
+    @Test
+    fun addWeighInTreatsEverySuccessStatusAsStored() = runBlocking<Unit> {
+        seedTokens()
+        for (code in listOf(201, 202, 204)) {
+            recorded.clear()
+            apiQueue += code to ""
+
+            client().addWeighIn(8025, weighInTs)
+
+            assertEquals("status $code", 1, recorded.size)
+        }
+    }
+
     /** 5xx is retried: 500, 500, 200 → success after exactly 3 requests. */
     @Test
     fun addWeighInRetriesServerErrorsUpToThreeAttempts() = runBlocking<Unit> {

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- No window action bar: Compose draws its own TopAppBar, and with
+         targetSdk 35+ (forced edge-to-edge) a platform action bar would
+         overlap the content. Colors come from the Compose AppTheme. -->
+    <style name="Theme.XiaomiScaleSync" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>
