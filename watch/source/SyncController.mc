@@ -146,6 +146,11 @@ class SyncController extends LinkListener {
                 saveLast(latest);
             }
             _attempt = 0;
+        } else if (error == ScaleSession.ERR_AUTH && !(_link as BleLink).matchedByMac) {
+            // A soliciting 0xFE95 device that is not our scale: skip it.
+            (_link as BleLink).rejectCurrent();
+            retryOrGiveUp("Not your scale");
+            return;
         } else if (error == ScaleSession.ERR_AUTH) {
             // A wrong key never gets better by retrying.
             model.message = messageFor(error);

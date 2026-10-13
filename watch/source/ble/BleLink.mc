@@ -53,6 +53,15 @@ class BleLink extends SessionHost {
     var state as Number = LINK_IDLE;
     //! Why the last link attempt failed (shown on screen, safe to log).
     var lastFailure as String = "";
+    //! True when the connected device was identified by its MAC; false
+    //! when it was the soliciting-0xFE95 fallback (a failed login then
+    //! means "not our scale", not "wrong TOKEN").
+    var matchedByMac as Boolean = false;
+
+    // MiBeacon frame-control bits (BeaconDecoder.kt).
+    private static const FC_MAC = 0x10;
+    private static const FC_SOLICIT = 0x0200;
+    private static const MAX_LOGGED = 16;
 
     private static const CONNECT_TIMEOUT_MS = 15000;
     private static const SERVICE_RETRY_MS = 500;
@@ -71,6 +80,11 @@ class BleLink extends SessionHost {
     private var _faultTimer as Timer.Timer = new Timer.Timer();
     private var _connTimer as Timer.Timer = new Timer.Timer();
     private var _serviceTries as Number = 0;
+    private var _current as BluetoothLowEnergy.ScanResult or Null = null;
+    //! Fallback devices that failed login this app run.
+    private var _rejects as Array<BluetoothLowEnergy.ScanResult> = [] as Array<BluetoothLowEnergy.ScanResult>;
+    //! [ScanResult, frameControl] already written to the log.
+    private var _logged as Array<Array> = [] as Array<Array>;
 
     function initialize(listener as LinkListener) {
         SessionHost.initialize();
@@ -90,6 +104,7 @@ class BleLink extends SessionHost {
                     :uuid => BluetoothLowEnergy.stringToUuid(SERVICE),
                     :characteristics => chars
                 });
+                System.println("link: profile registration requested");
             } catch (e instanceof BluetoothLowEnergy.ProfileRegistrationException) {
                 // Registrations can outlive this app instance (the test
                 // harness restarts the app per test; max 3 profiles):
@@ -222,28 +237,49 @@ class BleLink extends SessionHost {
         if (state != LINK_SCANNING) {
             return;
         }
+        var fallback = null;
         for (var r = results.next(); r != null; r = results.next()) {
             var result = r as BluetoothLowEnergy.ScanResult;
-            if (!matches(result)) {
-                continue;
-            }
-            setState(LINK_SEEN);
-            log("scale seen, rssi " + result.getRssi().toString());
-            BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_OFF);
-            try {
-                _device = BluetoothLowEnergy.pairDevice(result);
-            } catch (e) {
-                log("pairDevice threw: " + e.getErrorMessage());
-                _device = null;
-            }
-            if (_device == null) {
-                failLink("Pair failed");
+            var kind = classify(result);
+            if (kind == MATCH_MAC) {
+                connect(result, true);
                 return;
             }
-            log("pairing, waiting for connection");
-            _connTimer.start(method(:onConnectTimeout), CONNECT_TIMEOUT_MS, false);
+            if (kind == MATCH_SOLICIT && fallback == null) {
+                fallback = result;
+            }
+        }
+        if (fallback != null) {
+            connect(fallback, false);
+        }
+    }
+
+    //! A fallback device failed login: skip it for the rest of this run.
+    function rejectCurrent() as Void {
+        var c = _current;
+        if (c != null) {
+            _rejects.add(c);
+        }
+    }
+
+    private function connect(result as BluetoothLowEnergy.ScanResult, byMac as Boolean) as Void {
+        matchedByMac = byMac;
+        _current = result;
+        setState(LINK_SEEN);
+        log("scale seen (" + (byMac ? "MAC" : "soliciting 0xfe95") + "), rssi " + result.getRssi().toString());
+        BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_OFF);
+        try {
+            _device = BluetoothLowEnergy.pairDevice(result);
+        } catch (e) {
+            log("pairDevice threw: " + e.getErrorMessage());
+            _device = null;
+        }
+        if (_device == null) {
+            failLink("Pair failed");
             return;
         }
+        log("pairing, waiting for connection");
+        _connTimer.start(method(:onConnectTimeout), CONNECT_TIMEOUT_MS, false);
     }
 
     function onConnectedStateChanged(device as BluetoothLowEnergy.Device, connState as BluetoothLowEnergy.ConnectionState) as Void {
@@ -331,22 +367,71 @@ class BleLink extends SessionHost {
 
     // ---------- helpers ----------
 
-    private function matches(r as BluetoothLowEnergy.ScanResult) as Boolean {
-        if (r.hasAddress(_mac)) {
-            return true;
-        }
-        // MiBeacon: frame control(2) product id(2) frame counter(1) then,
-        // when the MAC-included bit (0x10) is set, the MAC little-endian.
+    private static const MATCH_NONE = 0;
+    private static const MATCH_MAC = 1;
+    private static const MATCH_SOLICIT = 2;
+
+    //! MATCH_MAC: the advertiser is the configured scale (hasAddress, or
+    //! the MAC field of its MiBeacon). MATCH_SOLICIT: an unknown 0xFE95
+    //! advertiser asking for a client ("connect to me", fc bit 0x0200),
+    //! tried when the MAC cannot be seen; a failed login rejects it.
+    private function classify(r as BluetoothLowEnergy.ScanResult) as Number {
+        var addr = r.hasAddress(_mac) || r.hasAddress(_mac.toLower()) || r.hasAddress(_macBytes);
         var data = r.getServiceData(BluetoothLowEnergy.stringToUuid(SERVICE));
-        if (data == null || data.size() < 11 || (data[0] & 0x10) == 0) {
-            return false;
-        }
-        for (var i = 0; i < 6; i++) {
-            if (data[5 + i] != _macBytes[5 - i]) {
-                return false;
+        var fc = data != null && data.size() >= 5 ? (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) : -1;
+        var beaconMac = false;
+        if (fc >= 0 && (fc & FC_MAC) != 0 && data.size() >= 11) {
+            beaconMac = true;
+            for (var i = 0; i < 6; i++) {
+                if (data[5 + i] != _macBytes[5 - i]) {
+                    beaconMac = false;
+                }
             }
         }
-        return true;
+        if (addr || fc >= 0) {
+            logAdvertiser(r, data, fc, addr, beaconMac);
+        }
+        if (addr || beaconMac) {
+            return MATCH_MAC;
+        }
+        if (fc >= 0 && (fc & FC_SOLICIT) != 0 && !isRejected(r)) {
+            return MATCH_SOLICIT;
+        }
+        return MATCH_NONE;
+    }
+
+    private function isRejected(r as BluetoothLowEnergy.ScanResult) as Boolean {
+        for (var i = 0; i < _rejects.size(); i++) {
+            if (r.isSameDevice(_rejects[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    //! One line per advertiser and frame-control value: bits, product id,
+    //! RSSI and match results only, never the address itself.
+    private function logAdvertiser(r as BluetoothLowEnergy.ScanResult, data as ByteArray or Null,
+            fc as Number, addr as Boolean, beaconMac as Boolean) as Void {
+        for (var i = 0; i < _logged.size(); i++) {
+            var e = _logged[i];
+            if (e[1] == fc && r.isSameDevice(e[0] as BluetoothLowEnergy.ScanResult)) {
+                return;
+            }
+        }
+        if (_logged.size() >= MAX_LOGGED) {
+            return;
+        }
+        _logged.add([r, fc]);
+        var pid = data != null && data.size() >= 4 ? (data[2] & 0xFF) | ((data[3] & 0xFF) << 8) : -1;
+        log("adv #" + _logged.size().toString()
+            + " fc=" + (fc >= 0 ? fc.format("%04x") : "none")
+            + " pid=" + (pid >= 0 ? pid.format("%04x") : "none")
+            + " len=" + (data != null ? data.size().toString() : "0")
+            + " rssi=" + r.getRssi().toString()
+            + " hasAddress=" + (addr ? "yes" : "no")
+            + " beaconMac=" + ((fc >= 0 && (fc & FC_MAC) != 0) ? (beaconMac ? "match" : "other") : "absent")
+            + " solicit=" + ((fc >= 0 && (fc & FC_SOLICIT) != 0) ? "yes" : "no"));
     }
 
     private function indexOf(c as BluetoothLowEnergy.Characteristic) as Number {
