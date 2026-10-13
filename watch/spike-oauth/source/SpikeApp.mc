@@ -42,10 +42,12 @@ class SpikeApp extends Application.AppBase {
     }
 
     //! Garmin portal SSO (same constants as the Android client's
-    //! PORTAL_SSO_CLIENT_ID / PORTAL_SERVICE_URL). makeOAuthRequest opens
-    //! the sign-in page in the phone's Garmin Connect app; on success the
-    //! redirect carries ?ticket=... to the result URL, which the
-    //! registerForOAuthMessages callback then receives.
+    //! PORTAL_SSO_CLIENT_ID / PORTAL_SERVICE_URL). Params match the
+    //! reference web-login flow (python-garminconnect): clientId, an
+    //! percent-encoded service, consumeServiceTicket. makeOAuthRequest
+    //! opens the sign-in page in the phone's Garmin Connect app; on
+    //! success the redirect carries ?ticket=... to the result URL, which
+    //! the registerForOAuthMessages callback then receives.
     function startSignIn() as Void {
         _view.setStatus("Opening\nsign-in...", null);
         WatchUi.requestUpdate();
@@ -53,8 +55,7 @@ class SpikeApp extends Application.AppBase {
             "https://sso.garmin.com/sso/signin",
             {
                 "clientId" => "GarminConnect",
-                "service" => "https://connect.garmin.com/app",
-                "locale" => "en-US",
+                "service" => Communications.encodeURL("https://connect.garmin.com/app"),
                 "consumeServiceTicket" => "true"
             },
             "https://connect.garmin.com/app",
