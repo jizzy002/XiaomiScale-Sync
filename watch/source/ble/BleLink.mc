@@ -51,6 +51,12 @@ class BleLink extends SessionHost {
     private static var _profileRegistered as Boolean = false;
 
     var state as Number = LINK_IDLE;
+    //! Why the last link attempt failed (shown on screen, safe to log).
+    var lastFailure as String = "";
+
+    private static const CONNECT_TIMEOUT_MS = 15000;
+    private static const SERVICE_RETRY_MS = 500;
+    private static const SERVICE_RETRIES = 6;
 
     private var _listener as LinkListener;
     private var _events as BleEvents;
@@ -63,6 +69,8 @@ class BleLink extends SessionHost {
     private var _busy as Boolean = false;
     private var _timer as Timer.Timer = new Timer.Timer();
     private var _faultTimer as Timer.Timer = new Timer.Timer();
+    private var _connTimer as Timer.Timer = new Timer.Timer();
+    private var _serviceTries as Number = 0;
 
     function initialize(listener as LinkListener) {
         SessionHost.initialize();
@@ -77,10 +85,17 @@ class BleLink extends SessionHost {
                     :descriptors => [BluetoothLowEnergy.cccdUuid()]
                 });
             }
-            BluetoothLowEnergy.registerProfile({
-                :uuid => BluetoothLowEnergy.stringToUuid(SERVICE),
-                :characteristics => chars
-            });
+            try {
+                BluetoothLowEnergy.registerProfile({
+                    :uuid => BluetoothLowEnergy.stringToUuid(SERVICE),
+                    :characteristics => chars
+                });
+            } catch (e instanceof BluetoothLowEnergy.ProfileRegistrationException) {
+                // Registrations can outlive this app instance (the test
+                // harness restarts the app per test; max 3 profiles):
+                // the profile is already known to the system.
+                System.println("link: profile already registered: " + e.getErrorMessage());
+            }
             _profileRegistered = true;
         }
     }
@@ -89,7 +104,13 @@ class BleLink extends SessionHost {
     function startScan(mac as String) as Void {
         _mac = mac;
         _macBytes = AppConfig.macBytes(mac) as ByteArray;
+        _session = null;
+        _chars = [null, null, null, null];
+        _queue = [] as Array<Array>;
+        _busy = false;
+        lastFailure = "";
         setState(LINK_SCANNING);
+        log("scanning");
         BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_SCANNING);
     }
 
@@ -111,6 +132,7 @@ class BleLink extends SessionHost {
 
     function close() as Void {
         _timer.stop();
+        _connTimer.stop();
         _queue = [] as Array<Array>;
         _busy = false;
         try {
@@ -190,7 +212,7 @@ class BleLink extends SessionHost {
         if (s != null) {
             s.onLinkLost();
         } else {
-            _listener.onLinkFailed();
+            failLink("GATT request failed");
         }
     }
 
@@ -206,49 +228,87 @@ class BleLink extends SessionHost {
                 continue;
             }
             setState(LINK_SEEN);
+            log("scale seen, rssi " + result.getRssi().toString());
             BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_OFF);
             try {
                 _device = BluetoothLowEnergy.pairDevice(result);
             } catch (e) {
-                log("pair failed");
+                log("pairDevice threw: " + e.getErrorMessage());
                 _device = null;
             }
             if (_device == null) {
-                _listener.onLinkFailed();
+                failLink("Pair failed");
+                return;
             }
+            log("pairing, waiting for connection");
+            _connTimer.start(method(:onConnectTimeout), CONNECT_TIMEOUT_MS, false);
             return;
         }
     }
 
     function onConnectedStateChanged(device as BluetoothLowEnergy.Device, connState as BluetoothLowEnergy.ConnectionState) as Void {
+        log("connection state " + connState.toString());
+        if (state == LINK_CLOSED || state == LINK_IDLE) {
+            return;
+        }
         if (connState == BluetoothLowEnergy.CONNECTION_STATE_CONNECTED) {
-            var service = device.getService(BluetoothLowEnergy.stringToUuid(SERVICE));
-            if (service == null) {
-                log("service 0xfe95 not found");
-                _listener.onLinkFailed();
-                return;
-            }
-            for (var i = 0; i < CHARS.size(); i++) {
-                _chars[i] = service.getCharacteristic(BluetoothLowEnergy.stringToUuid(CHARS[i]));
-                if (_chars[i] == null) {
-                    log("characteristic " + i.toString() + " not found");
-                    _listener.onLinkFailed();
-                    return;
-                }
-            }
-            setState(LINK_CONNECTED);
-            _listener.onLinkReady();
-        } else if (state != LINK_CLOSED) {
-            log("disconnected");
+            _connTimer.stop();
+            _device = device;
+            _serviceTries = 0;
+            resolveService();
+        } else {
+            _connTimer.stop();
             _queue = [] as Array<Array>;
             _busy = false;
             var s = _session;
             if (s != null) {
                 s.onLinkLost();
             } else {
-                _listener.onLinkFailed();
+                failLink(state == LINK_SEEN ? "Connect failed" : "Disconnected");
             }
         }
+    }
+
+    //! Services may not be discovered the instant the link comes up, so
+    //! the lookup is retried a few times before giving up.
+    function resolveService() as Void {
+        var device = _device;
+        if (device == null || state == LINK_CLOSED) {
+            return;
+        }
+        var service = device.getService(BluetoothLowEnergy.stringToUuid(SERVICE));
+        if (service == null) {
+            _serviceTries++;
+            if (_serviceTries < SERVICE_RETRIES) {
+                _connTimer.start(method(:resolveService), SERVICE_RETRY_MS, false);
+            } else {
+                failLink("No scale service");
+            }
+            return;
+        }
+        for (var i = 0; i < CHARS.size(); i++) {
+            _chars[i] = service.getCharacteristic(BluetoothLowEnergy.stringToUuid(CHARS[i]));
+            if (_chars[i] == null) {
+                log("characteristic " + i.toString() + " not found");
+                failLink("No scale characteristic");
+                return;
+            }
+        }
+        log("GATT ready after " + _serviceTries.toString() + " retries");
+        setState(LINK_CONNECTED);
+        _listener.onLinkReady();
+    }
+
+    function onConnectTimeout() as Void {
+        if (state == LINK_SEEN) {
+            failLink("Connect timed out");
+        }
+    }
+
+    private function failLink(reason as String) as Void {
+        log("link failed: " + reason);
+        lastFailure = reason;
+        _listener.onLinkFailed();
     }
 
     function onCharacteristicChanged(c as BluetoothLowEnergy.Characteristic, value as ByteArray) as Void {
@@ -339,9 +399,15 @@ class BleEvents extends BluetoothLowEnergy.BleDelegate {
         _link.onWriteDone(status);
     }
 
+    function onScanStateChange(scanState as BluetoothLowEnergy.ScanState, status as BluetoothLowEnergy.Status) as Void {
+        System.println("link: scan state " + scanState.toString() + ", status " + status.toString());
+    }
+
+    function onEncryptionStatus(device as BluetoothLowEnergy.Device, status as BluetoothLowEnergy.Status) as Void {
+        System.println("link: encryption status " + status.toString());
+    }
+
     function onProfileRegister(uuid as BluetoothLowEnergy.Uuid, status as BluetoothLowEnergy.Status) as Void {
-        if (status != BluetoothLowEnergy.STATUS_SUCCESS) {
-            System.println("link: profile registration failed, status " + status.toString());
-        }
+        System.println("link: profile registered, status " + status.toString());
     }
 }

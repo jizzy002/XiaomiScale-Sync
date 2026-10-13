@@ -1,5 +1,7 @@
 import Toybox.Application;
 import Toybox.Lang;
+import Toybox.System;
+import Toybox.Timer;
 import Toybox.WatchUi;
 
 //! Everything the main screen draws. The controller fills it; the view
@@ -23,6 +25,10 @@ class UiModel {
 class SyncController extends LinkListener {
     private static const STORE_LAST = "last";
     private static const DEFAULT_PROFILE_WEIGHT = 8000;
+    //! Connection attempts per app open (the scale keeps asking to be
+    //! collected for ~5 minutes after a weigh-in, so retries are cheap).
+    private static const MAX_ATTEMPTS = 3;
+    private static const RETRY_DELAY_MS = 1500;
 
     var model as UiModel = new UiModel();
 
@@ -30,6 +36,8 @@ class SyncController extends LinkListener {
     private var _link as BleLink or Null = null;
     private var _session as ScaleSession or Null = null;
     private var _events as SessionEvents;
+    private var _attempt as Number = 0;
+    private var _retryTimer as Timer.Timer = new Timer.Timer();
 
     function initialize() {
         LinkListener.initialize();
@@ -58,10 +66,12 @@ class SyncController extends LinkListener {
     //! Start button: drop whatever is running and scan again.
     function retry() as Void {
         stop();
+        _attempt = 0;
         start();
     }
 
     function stop() as Void {
+        _retryTimer.stop();
         var link = _link;
         if (link != null) {
             link.close();
@@ -91,9 +101,29 @@ class SyncController extends LinkListener {
     }
 
     function onLinkFailed() as Void {
-        model.message = "Scale not reachable";
+        var reason = _link != null ? (_link as BleLink).lastFailure : "";
+        retryOrGiveUp(reason.length() > 0 ? reason : "Scale not reachable");
+    }
+
+    //! Android retries a failed session by reconnecting from scratch; the
+    //! watch does the same, a few times per app open.
+    private function retryOrGiveUp(reason as String) as Void {
         stop();
+        _attempt++;
+        System.println("controller: attempt " + _attempt.toString() + " failed: " + reason);
+        if (_attempt < MAX_ATTEMPTS) {
+            model.message = reason + " - retry " + (_attempt + 1).toString() + "/" + MAX_ATTEMPTS.toString();
+            _retryTimer.start(method(:onRetry), RETRY_DELAY_MS, false);
+        } else {
+            model.message = reason + " - press Start";
+        }
         WatchUi.requestUpdate();
+    }
+
+    function onRetry() as Void {
+        var keep = model.message;
+        start();
+        model.message = keep;
     }
 
     // ---------- session (via SessionEvents) ----------
@@ -115,8 +145,14 @@ class SyncController extends LinkListener {
             if (latest != null && latest.mine) {
                 saveLast(latest);
             }
-        } else {
+            _attempt = 0;
+        } else if (error == ScaleSession.ERR_AUTH) {
+            // A wrong key never gets better by retrying.
             model.message = messageFor(error);
+            stop();
+        } else {
+            retryOrGiveUp(messageFor(error));
+            return;
         }
         WatchUi.requestUpdate();
     }
