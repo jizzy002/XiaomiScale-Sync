@@ -1,35 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Scale glyph inside the 66dp adaptive-icon safe zone (21..87 of 108). -->
+<!-- The dark-grey S200's glass top waking up: a mint gauge glowing through
+     the glass. Kept inside the 66dp adaptive-icon safe zone (21..87 of 108). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Scale body -->
+    <!-- Soft shadow under the scale -->
+    <path android:pathData="M26,58 A28,28 0 1 0 82,58 A28,28 0 1 0 26,58 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="58"
+                android:gradientRadius="28">
+                <item android:offset="0.6" android:color="#59003A26" />
+                <item android:offset="1" android:color="#00003A26" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Glass slab -->
+    <path android:pathData="M39,32 H69 A7,7 0 0 1 76,39 V69 A7,7 0 0 1 69,76 H39 A7,7 0 0 1 32,69 V39 A7,7 0 0 1 39,32 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="32"
+                android:startY="32"
+                android:endX="76"
+                android:endY="76">
+                <item android:offset="0" android:color="#FF3A4246" />
+                <item android:offset="1" android:color="#FF121618" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Tempered-glass edge highlight -->
     <path
-        android:pathData="M40,32 H68 A8,8 0 0 1 76,40 V68 A8,8 0 0 1 68,76 H40 A8,8 0 0 1 32,68 V40 A8,8 0 0 1 40,32 Z"
+        android:pathData="M33,40 A7,7 0 0 1 39,33 H69"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="4"
-        android:fillColor="#00000000" />
-    <!-- Dial arc -->
+        android:strokeAlpha="0.45"
+        android:strokeWidth="1" />
+    <!-- Diagonal reflection -->
     <path
-        android:pathData="M43,54 A11,11 0 0 1 65,54"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="4"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000" />
-    <!-- Needle -->
+        android:pathData="M32,68 L76,38 V69 A7,7 0 0 1 69,76 H39 A7,7 0 0 1 32,69 Z"
+        android:fillColor="#000000"
+        android:fillAlpha="0.18" />
+    <!-- Glow behind the gauge -->
+    <path android:pathData="M38,56 A16,16 0 1 0 70,56 A16,16 0 1 0 38,56 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="56"
+                android:gradientRadius="16">
+                <item android:offset="0" android:color="#8C7DF5C2" />
+                <item android:offset="1" android:color="#007DF5C2" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Gauge arc -->
     <path
-        android:pathData="M54,54 L59,46"
-        android:strokeColor="#FFFFFF"
+        android:pathData="M42.5,59 A11.5,11.5 0 0 1 65.5,59"
+        android:strokeColor="#6FF0B5"
         android:strokeWidth="3.5"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000" />
-    <!-- Display -->
+        android:strokeLineCap="round" />
+    <!-- Needle and hub -->
     <path
-        android:pathData="M47,65 H61"
+        android:pathData="M54,58 L60,50.5"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="3.5"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000" />
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M51.6,58.5 A2.4,2.4 0 1 0 56.4,58.5 A2.4,2.4 0 1 0 51.6,58.5 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- Readout -->
+    <path
+        android:pathData="M49,66 H59"
+        android:strokeColor="#6FF0B5"
+        android:strokeAlpha="0.6"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
 </vector>
