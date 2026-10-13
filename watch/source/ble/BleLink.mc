@@ -65,7 +65,7 @@ class BleLink extends SessionHost {
 
     private static const CONNECT_TIMEOUT_MS = 45000; // room to answer a connect prompt on the watch
     private static const SERVICE_RETRY_MS = 500;
-    private static const SERVICE_RETRIES = 6;
+    private static const SERVICE_RETRIES = 20; // discovery after connect can take several seconds
     //! If onProfileRegister never arrives, pair anyway after this.
     private static const PROFILE_WAIT_MS = 2000;
 
@@ -101,10 +101,10 @@ class BleLink extends SessionHost {
         _events = new BleEvents(self);
         BluetoothLowEnergy.setDelegate(_events);
         clearStalePairings();
-        // The profile is registered only once the scale has been seen:
-        // a registered profile appears to filter scan results down to
-        // devices listing its UUID, and the S200 carries 0xFE95 only as
-        // service data (device log: zero results with it registered).
+        // Register up front: Connect IQ discovers a device's services only
+        // for profiles registered before the connection. The scale stays
+        // visible to scanning either way (it is matched by MAC).
+        registerProfile();
     }
 
     //! `mac` is the normalised "AA:BB:CC:DD:EE:FF" form.
@@ -268,21 +268,14 @@ class BleLink extends SessionHost {
         _current = result;
         setState(LINK_SEEN);
         log("scale seen (" + (byMac ? "MAC" : "soliciting 0xfe95") + "), rssi " + result.getRssi().toString());
-        // Connect first, with NO profile registered: a registered 0xFE95
-        // profile filters the scale out of scanning (it carries 0xFE95 only
-        // as service data), and pairDevice's own search hits the same
-        // filter. The profile is registered after the link is up, before
-        // services are read. Scanning stays on until then (the stack's
-        // pairDevice search needs it).
+        // Pair at once while the scale is soliciting; it accepts a
+        // connection only in that brief post-weigh-in window. Scanning
+        // stays on until the connection completes.
         pair();
     }
 
     function onProfileRegistered(status as Number) as Void {
         log("profile registered, status " + status.toString());
-        if (state == LINK_CONNECTED && _device != null) {
-            _serviceTries = 0;
-            resolveService();
-        }
     }
 
     private function registerProfile() as Void {
@@ -371,14 +364,7 @@ class BleLink extends SessionHost {
             _device = device;
             _serviceTries = 0;
             setState(LINK_CONNECTED);
-            if (_profileRegistered) {
-                resolveService();
-            } else {
-                // Register now that the link is up; onProfileRegistered or
-                // the retry in resolveService drives discovery.
-                registerProfile();
-                _connTimer.start(method(:resolveService), PROFILE_WAIT_MS, false);
-            }
+            resolveService();
         } else {
             _connTimer.stop();
             _queue = [] as Array<Array>;
