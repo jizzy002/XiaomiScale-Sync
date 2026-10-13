@@ -99,6 +99,7 @@ class BleLink extends SessionHost {
         _listener = listener;
         _events = new BleEvents(self);
         BluetoothLowEnergy.setDelegate(_events);
+        clearStalePairings();
         // The profile is registered only once the scale has been seen:
         // a registered profile appears to filter scan results down to
         // devices listing its UUID, and the S200 carries 0xFE95 only as
@@ -310,11 +311,36 @@ class BleLink extends SessionHost {
         _profileRegistered = true;
     }
 
+    //! Pairings do not survive an app restart, but a crashed run can leave
+    //! the system holding one and tying up a connection slot. Drop them
+    //! and report how many connections are free before we try.
+    private function clearStalePairings() as Void {
+        try {
+            var paired = BluetoothLowEnergy.getPairedDevices();
+            var n = 0;
+            for (var d = paired.next(); d != null; d = paired.next()) {
+                if (d instanceof BluetoothLowEnergy.Device) {
+                    BluetoothLowEnergy.unpairDevice(d);
+                    n++;
+                }
+            }
+            log("cleared " + n.toString() + " stale pairing(s)");
+        } catch (e) {
+            log("clearStalePairings threw: " + e.getErrorMessage());
+        }
+    }
+
     function pair() as Void {
         var result = _current;
         if (state != LINK_SEEN || _device != null || result == null) {
             return;
         }
+        var free = -1;
+        try {
+            free = BluetoothLowEnergy.getAvailableConnectionCount();
+        } catch (e) {
+        }
+        log("pairing; free connections=" + free.toString());
         try {
             _device = BluetoothLowEnergy.pairDevice(result);
         } catch (e) {
@@ -325,7 +351,14 @@ class BleLink extends SessionHost {
             failLink("Pair failed");
             return;
         }
-        log("pairing, waiting for connection");
+        var dev = _device as BluetoothLowEnergy.Device;
+        log("pairDevice ok; connected=" + dev.isConnected().toString() + " bonded=" + dev.isBonded().toString());
+        // Some stacks connect synchronously and never fire the callback.
+        if (dev.isConnected()) {
+            onConnectedStateChanged(dev, BluetoothLowEnergy.CONNECTION_STATE_CONNECTED);
+            return;
+        }
+        log("waiting for connection");
         _connTimer.start(method(:onConnectTimeout), CONNECT_TIMEOUT_MS, false);
     }
 
