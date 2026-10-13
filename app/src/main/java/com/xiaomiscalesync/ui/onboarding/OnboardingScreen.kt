@@ -47,7 +47,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xiaomiscalesync.garmin.GarminAuthError
-import com.xiaomiscalesync.ui.debug.CodePrompt
+import com.xiaomiscalesync.ui.CodePrompt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -57,11 +57,10 @@ import kotlinx.coroutines.launch
  * done. Every decision lives in [OnboardingViewModel]; this file is the
  * Material 3 rendering plus the two suspend-prompt dialogs.
  *
- * Dialogs reuse the spike's proven [CodePrompt] hand-off (Mi 2FA/captcha
- * and Garmin MFA all suspend the login call until the dialog answers).
- * The captcha dialog is deliberately *not* the spike's debug version:
- * the image renders at full dialog width with a 280 dp minimum (both
- * axes), fixing the owner's "too small" complaint.
+ * Dialogs use the shared [CodePrompt] hand-off (Mi 2FA/captcha and
+ * Garmin MFA all suspend the login call until the dialog answers). The
+ * captcha image renders at full dialog width with a 280 dp minimum (both
+ * axes) so the characters stay readable.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -543,7 +542,7 @@ internal fun CodeDialog(promptText: String, onSubmit: (String?) -> Unit) {
  * In-app captcha dialog (Mi login) — the owner-required pop-out (no paste
  * fallback for the image itself). Renders at **full dialog width with a
  * 280 dp minimum on both axes** (`ContentScale.Fit`, no max-height cap),
- * fixing the spike's "too small" rendering. Dismiss = cancel.
+ * so the characters stay readable. Dismiss = cancel.
  */
 @Composable
 internal fun CaptchaDialog(image: ByteArray, onSubmit: (String?) -> Unit) {

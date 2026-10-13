@@ -21,3 +21,6 @@ captures/
 *.keystore
 *.jks
 *.pepk
+
+# Owner's Next.js design prototype — kept locally, not part of the app (plain Material 3 chosen)
+app-design/

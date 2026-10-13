@@ -69,6 +69,7 @@ import com.xiaomiscalesync.sync.EngineState
 import com.xiaomiscalesync.sync.SyncEngine
 import com.xiaomiscalesync.sync.SyncKind
 import com.xiaomiscalesync.sync.SyncResult
+import com.xiaomiscalesync.ui.CodePrompt
 import com.xiaomiscalesync.work.PushWorker
 import com.xiaomiscalesync.xiaomi.MiCloudClient
 import java.text.SimpleDateFormat
@@ -79,7 +80,6 @@ import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -468,61 +468,6 @@ class SpikeController(private val appContext: Context) {
 
         fun fmtTs(unixSeconds: Long): String =
             Instant.ofEpochSecond(unixSeconds).atZone(ZoneId.systemDefault()).format(TS_FMT)
-    }
-}
-
-/**
- * One suspendable prompt for the login flows (Mi captcha / Mi email 2FA /
- * Garmin MFA): the login call suspends in [ask] or [askCaptcha] until the
- * dialog submits or dismisses. State is snapshot-backed so the dialog
- * reacts instantly; the deferred hand-off is safe across the login thread
- * (OkHttp IO) and the main thread.
- */
-class CodePrompt {
-    /** A captcha challenge handed to [askCaptcha]: raw image bytes + resolved URL. */
-    class Captcha(val image: ByteArray, val url: String)
-
-    var prompt by mutableStateOf<String?>(null)
-        private set
-
-    var captcha by mutableStateOf<Captcha?>(null)
-        private set
-
-    @Volatile
-    private var pending: CompletableDeferred<String?>? = null
-
-    /** Suspends until the dialog answers; null = cancelled. */
-    suspend fun ask(text: String): String? = askWith { prompt = text }
-
-    /**
-     * [MiCloudClient.login]'s `onCaptcha` seam: shows [image] in a dialog
-     * and suspends until the typed code is submitted; null = cancelled or
-     * dismissed (→ [com.xiaomiscalesync.xiaomi.MiLoginBlocked]).
-     */
-    suspend fun askCaptcha(image: ByteArray, url: String): String? =
-        askWith { captcha = Captcha(image, url) }
-
-    private suspend fun askWith(open: () -> Unit): String? {
-        check(pending == null) { "a code prompt is already open" }
-        val deferred = CompletableDeferred<String?>()
-        pending = deferred
-        open()
-        return try {
-            deferred.await()
-        } finally {
-            prompt = null
-            captcha = null
-            pending = null
-        }
-    }
-
-    /** Called from the dialog (main thread). */
-    fun submit(code: String?) {
-        prompt = null
-        captcha = null
-        val deferred = pending
-        pending = null
-        deferred?.complete(code)
     }
 }
 

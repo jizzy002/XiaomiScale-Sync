@@ -22,7 +22,7 @@ enum class OnboardingStep { MI_KEYS, PROFILE, HISTORY, GARMIN, DONE }
  * Everything the onboarding UI renders — one immutable snapshot behind a
  * [StateFlow] so the ViewModel stays JVM-testable without Compose.
  *
- * Secrets discipline (mirrors the spike's rule): this state never carries
+ * Secrets discipline: this state never carries
  * key material — only *presence* flags (the green checks) and the field
  * drafts the owner typed. The stored MAC/TOKEN/BLE KEY live in
  * `Secrets` and are never logged.
@@ -126,8 +126,7 @@ class ScaleNotListedException :
  * in through [SettingsWriter] / [KeyVault] / [MiKeyExtractor] /
  * [GarminSignIn], so every decision above runs in JVM unit tests.
  * Class-level rule: **no key material in any state field or message** —
- * error text is sanitized (MAC-shaped fragments masked) like the spike's
- * log pane.
+ * error text is sanitized (MAC-shaped fragments masked, [KeyFormat.sanitize]).
  */
 class OnboardingViewModel(
     private val settings: SettingsWriter,
@@ -426,36 +425,12 @@ class OnboardingViewModel(
     /**
      * Exception text made safe for display: error paths can echo the raw
      * MAC (e.g. from `getRemoteDevice`) — every MAC-shaped fragment is
-     * masked. Mirrors the spike's `SpikeController.sanitize()`; TOKEN and
-     * BLE KEY never reach exception messages in the first place (the Mi
-     * client performs no logging and redacts `toString`).
-     * null → a generic fallback (never leaks a stack trace to the UI).
+     * masked by [KeyFormat.sanitize]; TOKEN and BLE KEY never reach
+     * exception messages in the first place (the Mi client performs no
+     * logging and redacts `toString`). null/empty → a generic fallback
+     * (never leaks a stack trace to the UI).
      */
-    private fun sanitize(text: String?): String {
-        val masked = text?.replace(MAC_IN_TEXT) { maskMac(it.value) }
-        return if (masked.isNullOrEmpty()) "sign-in failed" else masked
-    }
-
-    /** `AA:BB:CC:DD:**:**` — enough to recognise, never a handle. */
-    private fun maskMac(mac: String): String {
-        val hex = mac.filter { it.isLetterOrDigit() }.uppercase(java.util.Locale.US)
-        if (hex.length != 12) return mac
-        return (0 until 6).joinToString(":") { i ->
-            if (i < 4) hex.substring(i * 2, i * 2 + 2) else "**"
-        }
-    }
-
-    private companion object {
-        /**
-         * Any MAC-shaped fragment in free text — canonical colon/dash
-         * form, or a bare 12-hex word (word-bounded so a 24-hex TOKEN can
-         * never be mistaken for one).
-         */
-        val MAC_IN_TEXT = Regex(
-            "(?:(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})" +
-                "|(?<![0-9A-Fa-f])[0-9A-Fa-f]{12}(?![0-9A-Fa-f])",
-        )
-    }
+    private fun sanitize(text: String?): String = KeyFormat.sanitize(text).ifEmpty { "sign-in failed" }
 }
 
 // ---------------------------------------------------- production adapters

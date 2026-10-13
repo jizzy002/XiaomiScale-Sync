@@ -53,7 +53,7 @@ import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.data.Settings
 import com.xiaomiscalesync.data.ThemeMode
 import com.xiaomiscalesync.garmin.GarminAuthError
-import com.xiaomiscalesync.ui.debug.CodePrompt
+import com.xiaomiscalesync.ui.CodePrompt
 import com.xiaomiscalesync.ui.onboarding.CaptchaDialog
 import com.xiaomiscalesync.ui.onboarding.CodeDialog
 import com.xiaomiscalesync.ui.onboarding.GarminSso

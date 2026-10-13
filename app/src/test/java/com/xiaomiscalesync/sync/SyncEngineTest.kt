@@ -2,10 +2,9 @@ package com.xiaomiscalesync.sync
 
 import com.xiaomiscalesync.ble.Beacon
 import com.xiaomiscalesync.ble.BroadcastWeighIn
-import com.xiaomiscalesync.data.ArchiveDao
 import com.xiaomiscalesync.data.Category
+import com.xiaomiscalesync.data.FakeDao
 import com.xiaomiscalesync.data.GarminStatus
-import com.xiaomiscalesync.data.ScaleCleanupItem
 import com.xiaomiscalesync.data.Settings
 import com.xiaomiscalesync.data.SettingsSource
 import com.xiaomiscalesync.data.WeighInRecord
@@ -21,8 +20,6 @@ import com.xiaomiscalesync.proto.ScaleSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -105,74 +102,6 @@ class SyncEngineTest {
         val engine = SyncEngine(repo, { rig.open() }, profile, config, clock)
 
         val rows: List<WeighInRecord> get() = dao.rows.value
-    }
-
-    /** In-memory stand-in for the Room DAO (same contract, no SQLite). */
-    private class FakeDao : ArchiveDao {
-        private var nextId = 1L
-        val rows = MutableStateFlow<List<WeighInRecord>>(emptyList())
-        val scaleCleanup = MutableStateFlow<List<Long>>(emptyList())
-
-        override fun observeAll(): Flow<List<WeighInRecord>> =
-            rows.map { list -> list.sortedByDescending { it.recordedAt } }
-
-        override fun observeByCategory(category: Category): Flow<List<WeighInRecord>> =
-            rows.map { list -> list.filter { it.category == category }.sortedByDescending { it.recordedAt } }
-
-        override suspend fun all(): List<WeighInRecord> = rows.value
-
-        override suspend fun insert(record: WeighInRecord): Long {
-            val conflict = rows.value.any {
-                it.recordedAt == record.recordedAt && it.weightGrams == record.weightGrams
-            }
-            if (conflict) return -1L
-            val id = nextId++
-            rows.value = rows.value + record.copy(id = id)
-            return id
-        }
-
-        override suspend fun fillRecordNo(id: Long, recordNo: Long) {
-            rows.value = rows.value.map {
-                if (it.id == id && it.recordNo == null) it.copy(recordNo = recordNo) else it
-            }
-        }
-
-        override suspend fun setCategory(id: Long, category: Category) {
-            rows.value = rows.value.map { if (it.id == id) it.copy(category = category) else it }
-        }
-
-        override suspend fun delete(ids: List<Long>) {
-            rows.value = rows.value.filterNot { it.id in ids }
-        }
-
-        override suspend fun deleteAll() {
-            rows.value = emptyList()
-        }
-
-        override suspend fun rowsWith(status: GarminStatus, category: Category): List<WeighInRecord> =
-            rows.value.filter { it.garminStatus == status && it.category == category }
-
-        override suspend fun setGarminStatus(ids: List<Long>, status: GarminStatus) {
-            rows.value = rows.value.map { if (it.id in ids) it.copy(garminStatus = status) else it }
-        }
-
-        override suspend fun setGarminStatusAt(ids: List<Long>, status: GarminStatus, pushedAt: Long) {
-            rows.value = rows.value.map {
-                if (it.id in ids) it.copy(garminStatus = status, pushedAt = pushedAt) else it
-            }
-        }
-
-        override suspend fun queueCleanup(items: List<ScaleCleanupItem>) {
-            val known = scaleCleanup.value.toMutableSet()
-            scaleCleanup.value = scaleCleanup.value + items.filter { known.add(it.recordNo) }.map { it.recordNo }
-        }
-
-        override suspend fun queuedCleanup(): List<ScaleCleanupItem> =
-            scaleCleanup.value.map { ScaleCleanupItem(recordNo = it) }
-
-        override suspend fun clearCleanup() {
-            scaleCleanup.value = emptyList()
-        }
     }
 
     // ---------- advertisement helpers ----------
