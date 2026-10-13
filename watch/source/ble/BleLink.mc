@@ -101,10 +101,10 @@ class BleLink extends SessionHost {
         _events = new BleEvents(self);
         BluetoothLowEnergy.setDelegate(_events);
         clearStalePairings();
-        // Register up front: Connect IQ discovers a device's services only
-        // for profiles registered before the connection. The scale stays
-        // visible to scanning either way (it is matched by MAC).
-        registerProfile();
+        // The profile is NOT registered here: device logs show that with
+        // the 0xFE95 profile registered, pairDevice never completes a
+        // connection to the scale, yet it connects fine with no profile.
+        // It is registered after the link is up (registerProfile).
     }
 
     //! `mac` is the normalised "AA:BB:CC:DD:EE:FF" form.
@@ -276,6 +276,9 @@ class BleLink extends SessionHost {
 
     function onProfileRegistered(status as Number) as Void {
         log("profile registered, status " + status.toString());
+        if (state == LINK_CONNECTED && !_ready) {
+            resolveService();
+        }
     }
 
     private function registerProfile() as Void {
@@ -364,6 +367,9 @@ class BleLink extends SessionHost {
             _device = device;
             _serviceTries = 0;
             setState(LINK_CONNECTED);
+            if (!_profileRegistered) {
+                registerProfile();
+            }
             resolveService();
         } else {
             _connTimer.stop();
@@ -388,6 +394,14 @@ class BleLink extends SessionHost {
         }
         var service = device.getService(BluetoothLowEnergy.stringToUuid(SERVICE));
         if (service == null) {
+            if (_serviceTries == 0 || _serviceTries == 10) {
+                var count = 0;
+                var it = device.getServices();
+                for (var sv = it.next(); sv != null; sv = it.next()) {
+                    count++;
+                }
+                log("discovery: " + count.toString() + " service(s) visible, try " + _serviceTries.toString());
+            }
             _serviceTries++;
             if (_serviceTries < SERVICE_RETRIES) {
                 _connTimer.start(method(:resolveService), SERVICE_RETRY_MS, false);
