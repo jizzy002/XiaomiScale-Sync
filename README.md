@@ -1,14 +1,16 @@
 <p align="center">
-  <img src="docs/icon.png" width="128" alt="">
+  <img src="docs/icon.png" width="256" alt="">
 </p>
 
+
 <h1 align="center">Xiaomi Scale Sync</h1>
+
 
 An open-source Android app that reads your **Xiaomi Smart Scale S200** over
 Bluetooth and sends your weigh-ins to **Garmin Connect**, without duplicates
 and without any server in between.
 
-<p align="left">
+<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/showcase-dark.png">
     <img alt="Home, History and Profile screens" src="docs/screenshots/showcase-light.png" width="70%">
