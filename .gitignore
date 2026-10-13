@@ -30,3 +30,5 @@ app-design/
 *.prg
 *.iq
 watch/**/bin/
+__pycache__/
+
