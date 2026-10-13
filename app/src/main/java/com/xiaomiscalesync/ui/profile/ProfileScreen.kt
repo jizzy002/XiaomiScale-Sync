@@ -73,7 +73,7 @@ import okhttp3.OkHttpClient
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileScreen(onOpenDebug: () -> Unit) {
+fun ProfileScreen(onOpenDebug: (() -> Unit)?) {
     val context = LocalContext.current
     val graph = AppGraph.of(context)
     val miPrompt = remember { CodePrompt() }
@@ -237,7 +237,7 @@ fun ProfileScreen(onOpenDebug: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = onOpenDebug) { Text("Debug tools") }
+                if (onOpenDebug != null) TextButton(onClick = onOpenDebug) { Text("Debug tools") }
             }
         }
     }

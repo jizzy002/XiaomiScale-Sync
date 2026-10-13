@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -14,7 +13,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -30,8 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.data.Secrets
 import com.xiaomiscalesync.data.SettingsStore
-import com.xiaomiscalesync.ui.debug.SpikeController
-import com.xiaomiscalesync.ui.debug.SpikeScreen
+import com.xiaomiscalesync.ui.debug.DebugTools
 import com.xiaomiscalesync.ui.history.HistoryScreen
 import com.xiaomiscalesync.ui.main.MainScreen
 import com.xiaomiscalesync.ui.profile.ProfileScreen
@@ -49,8 +46,8 @@ import okhttp3.OkHttpClient
  * The app's navigation graph (plan Task 14): the onboarding wizard shows
  * first whenever `Settings.onboarded` is false; once the wizard's Finish
  * flips it true (idempotent, single write), the flow re-emits and Main
- * takes over. [MainRoute] hosts `MainScreen` — the debug spike stays
- * reachable from it so the owner's milestone-0 harness never disappears.
+ * takes over. [MainRoute] hosts `MainScreen`; debug builds also reach the
+ * milestone-0 spike from it ([DebugTools]).
  */
 @Composable
 fun AppNavigation() {
@@ -140,7 +137,7 @@ private enum class Tab(val label: String) { HOME("Home"), HISTORY("History"), PR
  * Only Home listens to the scale, and only while it is visible and its
  * listening switch is on. The switch resets to ON at every fresh launch
  * (owner ruling 2026-10-13) — it survives rotation, not an app exit.
- * The milestone-0 debug spike stays reachable from Profile.
+ * Debug builds reach the milestone-0 spike from Profile ([DebugTools]).
  */
 @Composable
 private fun MainRoute() {
@@ -150,16 +147,14 @@ private fun MainRoute() {
     var listeningOn by rememberSaveable { mutableStateOf(true) }
 
     // App open: push anything left pending (e.g. a failed network push).
-    LaunchedEffect(Unit) { AppGraph.of(appContext).pushIfPending() }
+    LaunchedEffect(Unit) {
+        DebugTools.purgeLegacyStore(appContext)
+        AppGraph.of(appContext).pushIfPending()
+    }
 
     if (showSpike) {
         BackHandler { showSpike = false }
-        val controller = remember(appContext) { SpikeController(appContext) }
-        DisposableEffect(controller) {
-            onDispose { controller.dispose() }
-        }
-        // Debug screen has no Scaffold: keep it clear of the system bars.
-        Box(Modifier.safeDrawingPadding()) { SpikeScreen(controller) }
+        DebugTools.Screen(appContext)
         return
     }
 
@@ -198,7 +193,7 @@ private fun MainRoute() {
                     onOpenProfile = { tab = Tab.PROFILE },
                 )
                 Tab.HISTORY -> HistoryScreen()
-                Tab.PROFILE -> ProfileScreen(onOpenDebug = { showSpike = true })
+                Tab.PROFILE -> ProfileScreen(onOpenDebug = if (DebugTools.AVAILABLE) ({ showSpike = true }) else null)
             }
         }
     }

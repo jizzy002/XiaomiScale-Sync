@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- API 23–30 (fullBackupContent): secret storage never leaves the device.
      secrets.xml holds Android Keystore-encrypted ciphertext only (the key
-     itself is non-exportable), milestone0_spike.xml is the debug screen's
+     itself is non-exportable), milestone0_spike.xml is the debug-build screen's
      plain-prefs store — both are excluded so no key material can ride an
      auto backup. See data/Secrets.kt and the design spec's "never in
      logs or exported backups" rule. -->

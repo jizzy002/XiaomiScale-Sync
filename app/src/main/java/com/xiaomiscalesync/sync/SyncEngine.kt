@@ -2,6 +2,7 @@ package com.xiaomiscalesync.sync
 
 import com.xiaomiscalesync.ble.Beacon
 import com.xiaomiscalesync.ble.BroadcastWeighIn
+import com.xiaomiscalesync.data.KeyFormat
 import com.xiaomiscalesync.data.NewWeighIn
 import com.xiaomiscalesync.data.WeighInRepository
 import com.xiaomiscalesync.data.WeighInSource
@@ -228,13 +229,13 @@ class SyncEngine(
                 // Logged (message only, never key material) so a silent scale
                 // is diagnosable from the log pane: this catch is where the
                 // milestone-0 PROP-direction bug spent its reasons.
-                log("sync attempt $attempts/$config.maxAttempts failed: ${e.message}")
+                log("sync attempt $attempts/${config.maxAttempts} failed: ${KeyFormat.sanitize(e.message)}")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 // Anything else is not retryable in-session; it fails the sync
                 // outright rather than burning every attempt on the same error.
-                log("sync attempt $attempts aborted: ${e::class.simpleName}: ${e.message}")
+                log("sync attempt $attempts aborted: ${e::class.simpleName}: ${KeyFormat.sanitize(e.message)}")
                 return SyncResult(SyncKind.FAILED, attempts, collected)
             } finally {
                 runCatching { session.close() }

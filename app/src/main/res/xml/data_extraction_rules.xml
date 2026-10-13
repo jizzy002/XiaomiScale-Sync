@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- API 31+ (dataExtractionRules): same exclusions as backup_rules.xml —
-     Keystore-backed secrets and the debug screen's plain-prefs key store
+     Keystore-backed secrets and the debug-build screen's plain-prefs key store
      are never backed up or device-transferred. -->
 <data-extraction-rules>
     <cloud-backup>
