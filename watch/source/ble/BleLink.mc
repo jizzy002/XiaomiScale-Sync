@@ -270,9 +270,14 @@ class BleLink extends SessionHost {
         _current = result;
         setState(LINK_SEEN);
         log("scale seen (" + (byMac ? "MAC" : "soliciting 0xfe95") + "), rssi " + result.getRssi().toString());
-        // Pair at once while the scale is soliciting; it accepts a
-        // connection only in that brief post-weigh-in window. Scanning
-        // stays on until the connection completes.
+        // Stop scanning before pairing: with the profile registered, a
+        // connection started while the radio is still scanning never
+        // completes on this watch (every profile-registered run that kept
+        // scanning timed out). Pair at once, still inside the solicit window.
+        try {
+            BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_OFF);
+        } catch (e) {
+        }
         pair();
     }
 
