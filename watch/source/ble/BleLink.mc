@@ -85,6 +85,12 @@ class BleLink extends SessionHost {
     private var _rejects as Array<BluetoothLowEnergy.ScanResult> = [] as Array<BluetoothLowEnergy.ScanResult>;
     //! [ScanResult, frameControl] already written to the log.
     private var _logged as Array<Array> = [] as Array<Array>;
+    // Scan diagnostics: callbacks/results so far, devices described.
+    private var _scanCallbacks as Number = 0;
+    private var _scanResults as Number = 0;
+    private var _fe95Results as Number = 0;
+    private var _described as Array<BluetoothLowEnergy.ScanResult> = [] as Array<BluetoothLowEnergy.ScanResult>;
+    private static const MAX_DESCRIBED = 10;
 
     function initialize(listener as LinkListener) {
         SessionHost.initialize();
@@ -234,6 +240,11 @@ class BleLink extends SessionHost {
     // ---------- BleDelegate callbacks (via BleEvents) ----------
 
     function onScanResults(results as BluetoothLowEnergy.Iterator) as Void {
+        _scanCallbacks++;
+        if (_scanCallbacks == 1 || _scanCallbacks % 20 == 0) {
+            log("scan callback " + _scanCallbacks.toString() + " (state " + state.toString()
+                + "), results " + _scanResults.toString() + ", fe95 " + _fe95Results.toString());
+        }
         if (state != LINK_SCANNING) {
             return;
         }
@@ -377,7 +388,12 @@ class BleLink extends SessionHost {
     //! tried when the MAC cannot be seen; a failed login rejects it.
     private function classify(r as BluetoothLowEnergy.ScanResult) as Number {
         var addr = r.hasAddress(_mac) || r.hasAddress(_mac.toLower()) || r.hasAddress(_macBytes);
-        var data = r.getServiceData(BluetoothLowEnergy.stringToUuid(SERVICE));
+        _scanResults++;
+        describe(r);
+        var data = fe95Data(r);
+        if (data != null) {
+            _fe95Results++;
+        }
         var fc = data != null && data.size() >= 5 ? (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) : -1;
         var beaconMac = false;
         if (fc >= 0 && (fc & FC_MAC) != 0 && data.size() >= 11) {
@@ -398,6 +414,66 @@ class BleLink extends SessionHost {
             return MATCH_SOLICIT;
         }
         return MATCH_NONE;
+    }
+
+    //! The 0xFE95 service data: from getServiceData(), or parsed from the
+    //! raw advertisement (AD type 0x16 = 16-bit service data, UUID LE)
+    //! in case the 128-bit lookup misses a 16-bit entry.
+    private function fe95Data(r as BluetoothLowEnergy.ScanResult) as ByteArray or Null {
+        var d = r.getServiceData(BluetoothLowEnergy.stringToUuid(SERVICE));
+        if (d != null && d.size() > 0) {
+            return d;
+        }
+        var raw = r.getRawData();
+        if (raw == null) {
+            return null;
+        }
+        var at = 0;
+        while (at + 1 < raw.size()) {
+            var len = raw[at] & 0xFF;
+            if (len == 0 || at + 1 + len > raw.size()) {
+                return null;
+            }
+            var type = raw[at + 1] & 0xFF;
+            if (type == 0x16 && len >= 3 && raw[at + 2] == 0x95 && raw[at + 3] == 0xFE) {
+                return raw.slice(at + 4, at + 1 + len);
+            }
+            at += 1 + len;
+        }
+        return null;
+    }
+
+    //! First few devices: which AD types (and lengths) they advertise.
+    //! Types and lengths only - no payload, no address.
+    private function describe(r as BluetoothLowEnergy.ScanResult) as Void {
+        if (_described.size() >= MAX_DESCRIBED) {
+            return;
+        }
+        for (var i = 0; i < _described.size(); i++) {
+            if (r.isSameDevice(_described[i])) {
+                return;
+            }
+        }
+        _described.add(r);
+        var raw = r.getRawData();
+        var ads = "";
+        var at = 0;
+        while (raw != null && at + 1 < raw.size()) {
+            var len = raw[at] & 0xFF;
+            if (len == 0 || at + 1 + len > raw.size()) {
+                break;
+            }
+            var type = raw[at + 1] & 0xFF;
+            ads += type.format("%02x") + "/" + len.toString();
+            if (type == 0x16 || type == 0x03 || type == 0x02) {
+                // 16-bit UUID of service data / service lists (not secret)
+                ads += "(" + ((raw[at + 3] & 0xFF) << 8 | (raw[at + 2] & 0xFF)).format("%04x") + ")";
+            }
+            ads += " ";
+            at += 1 + len;
+        }
+        log("dev #" + _described.size().toString() + " rssi=" + r.getRssi().toString()
+            + " raw=" + (raw == null ? "null" : raw.size().toString()) + " ad: " + ads);
     }
 
     private function isRejected(r as BluetoothLowEnergy.ScanResult) as Boolean {
