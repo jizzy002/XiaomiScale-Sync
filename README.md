@@ -1,11 +1,21 @@
-# Xiaomi Scale Sync
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="">
+</p>
+
+<h1 align="center">Xiaomi Scale Sync</h1>
 
 An open-source Android app that reads your **Xiaomi Smart Scale S200** over
 Bluetooth and sends your weigh-ins to **Garmin Connect**, without duplicates
 and without any server in between.
 
-<!-- Screenshots: add Home / History / Profile images here, e.g.
-![Home](docs/screenshots/home.png) -->
+<p align="left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/showcase-dark.png">
+    <img alt="Home, History and Profile screens" src="docs/screenshots/showcase-light.png" width="70%">
+  </picture>
+  <br>
+  <sub>Home · History · Profile</sub>
+</p>
 
 - Captures weigh-ins while the app's **Home** tab is open: from the scale's
   broadcast, live while you stand on it, and from the scale's own memory.
@@ -118,6 +128,12 @@ Requires JDK 17.
 ./gradlew testDebugUnitTest assembleDebug     # tests + debug APK
 ./gradlew installDebug                        # install on a connected phone
 ```
+
+The README screenshots are framed with `scripts/frame_screenshots.py`
+(needs Pillow): save `<screen>-<theme>.png` captures (screen: `home`,
+`history`, `profile`; theme: `light`, `dark`) from
+`adb exec-out screencap -p` in a folder and run
+`python scripts/frame_screenshots.py <folder> docs/screenshots`.
 
 Releases are built by GitHub Actions when a `v*` tag is pushed
 (`.github/workflows/release.yml`). The signing keystore lives only in the
