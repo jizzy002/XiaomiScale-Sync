@@ -35,7 +35,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.material3:material3")
     // Channels/suspend for the BleTransport seam (was only transitive via Compose)
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 
     // Local weigh-in archive (Task 8): Room + DataStore-backed settings.
     implementation("androidx.room:room-runtime:2.8.5")
