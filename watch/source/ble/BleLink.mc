@@ -66,6 +66,8 @@ class BleLink extends SessionHost {
     private static const CONNECT_TIMEOUT_MS = 15000;
     private static const SERVICE_RETRY_MS = 500;
     private static const SERVICE_RETRIES = 6;
+    //! If onProfileRegister never arrives, pair anyway after this.
+    private static const PROFILE_WAIT_MS = 2000;
 
     private var _listener as LinkListener;
     private var _events as BleEvents;
@@ -97,28 +99,10 @@ class BleLink extends SessionHost {
         _listener = listener;
         _events = new BleEvents(self);
         BluetoothLowEnergy.setDelegate(_events);
-        if (!_profileRegistered) {
-            var chars = [];
-            for (var i = 0; i < CHARS.size(); i++) {
-                chars.add({
-                    :uuid => BluetoothLowEnergy.stringToUuid(CHARS[i]),
-                    :descriptors => [BluetoothLowEnergy.cccdUuid()]
-                });
-            }
-            try {
-                BluetoothLowEnergy.registerProfile({
-                    :uuid => BluetoothLowEnergy.stringToUuid(SERVICE),
-                    :characteristics => chars
-                });
-                System.println("link: profile registration requested");
-            } catch (e instanceof BluetoothLowEnergy.ProfileRegistrationException) {
-                // Registrations can outlive this app instance (the test
-                // harness restarts the app per test; max 3 profiles):
-                // the profile is already known to the system.
-                System.println("link: profile already registered: " + e.getErrorMessage());
-            }
-            _profileRegistered = true;
-        }
+        // The profile is registered only once the scale has been seen:
+        // a registered profile appears to filter scan results down to
+        // devices listing its UUID, and the S200 carries 0xFE95 only as
+        // service data (device log: zero results with it registered).
     }
 
     //! `mac` is the normalised "AA:BB:CC:DD:EE:FF" form.
@@ -126,6 +110,8 @@ class BleLink extends SessionHost {
         _mac = mac;
         _macBytes = AppConfig.macBytes(mac) as ByteArray;
         _session = null;
+        _device = null;
+        _current = null;
         _chars = [null, null, null, null];
         _queue = [] as Array<Array>;
         _busy = false;
@@ -279,6 +265,48 @@ class BleLink extends SessionHost {
         setState(LINK_SEEN);
         log("scale seen (" + (byMac ? "MAC" : "soliciting 0xfe95") + "), rssi " + result.getRssi().toString());
         BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_OFF);
+        if (_profileRegistered) {
+            pair();
+            return;
+        }
+        registerProfile();
+        _connTimer.start(method(:pair), PROFILE_WAIT_MS, false);
+    }
+
+    function onProfileRegistered(status as Number) as Void {
+        log("profile registered, status " + status.toString());
+        if (state == LINK_SEEN && _device == null) {
+            _connTimer.stop();
+            pair();
+        }
+    }
+
+    private function registerProfile() as Void {
+        var chars = [];
+        for (var i = 0; i < CHARS.size(); i++) {
+            chars.add({
+                :uuid => BluetoothLowEnergy.stringToUuid(CHARS[i]),
+                :descriptors => [BluetoothLowEnergy.cccdUuid()]
+            });
+        }
+        try {
+            BluetoothLowEnergy.registerProfile({
+                :uuid => BluetoothLowEnergy.stringToUuid(SERVICE),
+                :characteristics => chars
+            });
+            log("profile registration requested");
+        } catch (e instanceof BluetoothLowEnergy.ProfileRegistrationException) {
+            // Registrations can outlive an app instance (max 3 profiles).
+            log("profile already registered: " + e.getErrorMessage());
+        }
+        _profileRegistered = true;
+    }
+
+    function pair() as Void {
+        var result = _current;
+        if (state != LINK_SEEN || _device != null || result == null) {
+            return;
+        }
         try {
             _device = BluetoothLowEnergy.pairDevice(result);
         } catch (e) {
@@ -569,6 +597,6 @@ class BleEvents extends BluetoothLowEnergy.BleDelegate {
     }
 
     function onProfileRegister(uuid as BluetoothLowEnergy.Uuid, status as BluetoothLowEnergy.Status) as Void {
-        System.println("link: profile registered, status " + status.toString());
+        _link.onProfileRegistered(status);
     }
 }
