@@ -1,3 +1,17 @@
 <strings>
     <string id="AppName">Scale Sync</string>
+
+    <string id="SettingMac">Scale MAC</string>
+    <string id="SettingMacPrompt">e.g. AA:BB:CC:DD:EE:FF</string>
+    <string id="SettingToken">TOKEN (24 hex)</string>
+    <string id="SettingTokenPrompt">The cloud TOKEN field, not the BLE KEY</string>
+    <string id="SettingBleKey">BLE KEY (32 hex, optional)</string>
+    <string id="SettingBleKeyPrompt">Not needed by the watch; leave blank</string>
+    <string id="SettingHeight">Height (cm)</string>
+    <string id="SettingAge">Age</string>
+    <string id="SettingSex">Sex</string>
+    <string id="SexNone">Not specified</string>
+    <string id="SexMale">Male</string>
+    <string id="SexFemale">Female</string>
+    <string id="SettingMemberId">Member ID</string>
 </strings>

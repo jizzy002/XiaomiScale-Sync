@@ -1,0 +1,11 @@
+<properties>
+    <!-- Scale (from the Android app's "Reveal keys" or a Xiaomi cloud token extractor). -->
+    <property id="mac" type="string"></property>
+    <property id="token" type="string"></property>
+    <property id="bleKey" type="string"></property>
+    <!-- Profile pushed to the scale on every connection (action 7.1). -->
+    <property id="heightCm" type="number">180</property>
+    <property id="age" type="number">30</property>
+    <property id="sex" type="number">1</property>
+    <property id="memberId" type="string">1</property>
+</properties>

@@ -1,5 +1,5 @@
 <iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="3">
-    <iq:application id="1a056e92726d4e5fb09fa49f0d5e00ac" type="watch-app" name="@Strings.AppName" entry="HelloApp" launcherIcon="@Drawables.Launcher" minSdkVersion="3.2.0">
+    <iq:application id="1a056e92726d4e5fb09fa49f0d5e00ac" type="watch-app" name="@Strings.AppName" entry="ScaleSyncApp" launcherIcon="@Drawables.Launcher" minSdkVersion="3.2.0">
         <iq:products>
             <iq:product id="fr255"/>
             <iq:product id="fr255m"/>

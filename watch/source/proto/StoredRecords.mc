@@ -68,7 +68,7 @@ class StoredRecords {
 
     //! Kotlin `trim().toLongOrNull()` parity: optional sign, then one or
     //! more ASCII digits, surrounding whitespace ignored.
-    private static function parseLong(field as String) as Long or Null {
+    static function parseLong(field as String) as Long or Null {
         var chars = field.toCharArray();
         var start = 0;
         var end = chars.size();
@@ -103,7 +103,7 @@ class StoredRecords {
 
     //! String has no split(); String.find() searches from the start, so
     //! always search the remainder.
-    private static function split(s as String, sep as String) as Array<String> {
+    static function split(s as String, sep as String) as Array<String> {
         var parts = [] as Array<String>;
         var rest = s;
         while (true) {

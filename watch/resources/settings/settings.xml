@@ -1,0 +1,27 @@
+<settings>
+    <setting propertyKey="@Properties.mac" title="@Strings.SettingMac" prompt="@Strings.SettingMacPrompt">
+        <settingConfig type="alphaNumeric" />
+    </setting>
+    <setting propertyKey="@Properties.token" title="@Strings.SettingToken" prompt="@Strings.SettingTokenPrompt">
+        <settingConfig type="password" />
+    </setting>
+    <setting propertyKey="@Properties.bleKey" title="@Strings.SettingBleKey" prompt="@Strings.SettingBleKeyPrompt">
+        <settingConfig type="password" />
+    </setting>
+    <setting propertyKey="@Properties.heightCm" title="@Strings.SettingHeight">
+        <settingConfig type="numeric" min="50" max="250" />
+    </setting>
+    <setting propertyKey="@Properties.age" title="@Strings.SettingAge">
+        <settingConfig type="numeric" min="5" max="120" />
+    </setting>
+    <setting propertyKey="@Properties.sex" title="@Strings.SettingSex">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.SexNone</listEntry>
+            <listEntry value="1">@Strings.SexMale</listEntry>
+            <listEntry value="2">@Strings.SexFemale</listEntry>
+        </settingConfig>
+    </setting>
+    <setting propertyKey="@Properties.memberId" title="@Strings.SettingMemberId">
+        <settingConfig type="alphaNumeric" />
+    </setting>
+</settings>
