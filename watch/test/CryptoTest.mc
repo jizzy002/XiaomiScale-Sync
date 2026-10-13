@@ -76,45 +76,4 @@ function runHkdfFixture(f as Dictionary<String, Object>, name as String) as Void
     }
 }
 
-//! ------------------------------------------------------------- helpers
-
-//! Hex string -> ByteArray. Char.toNumber() is the UTF-32 code point,
-//! so hex digits are decoded by offset from their code points.
-function hex(s as String) as ByteArray {
-    var chars = s.toCharArray();
-    var out = []b;
-    for (var i = 0; i < chars.size() / 2; i++) {
-        var hi = hexDigit(chars[2 * i]);
-        var lo = hexDigit(chars[(2 * i) + 1]);
-        out.add((hi << 4) | lo);
-    }
-    return out;
-}
-
-//! '0'-'9' -> 0-9, 'a'-'f'/'A'-'F' -> 10-15. Unknown chars yield 0
-//! (fixtures are generated, so this never sees a non-hex char).
-function hexDigit(c as Char) as Number {
-    var v = c.toNumber();
-    if (v >= 48 && v <= 57) {
-        return v - 48;
-    }
-    if (v >= 97 && v <= 102) {
-        return v - 87;
-    }
-    if (v >= 65 && v <= 70) {
-        return v - 55;
-    }
-    return 0;
-}
-
-function bytesEqual(a as ByteArray, b as ByteArray) as Boolean {
-    return Bytes.equalsConstantTime(a, b);
-}
-
-function concat(a as ByteArray, b as ByteArray) as ByteArray {
-    return Bytes.concat(a, b);
-}
-
-function le16(v as Number) as ByteArray {
-    return [v & 0xFF, (v >> 8) & 0xFF]b;
-}
+//! Shared helpers (hex, le16, bytesEqual, concat) live in TestUtil.mc.

@@ -1,2 +1,2 @@
 project.manifest = manifest.xml
-sourcePath = source test
+base.sourcePath = source;test
