@@ -22,13 +22,23 @@ jobs:
 
       - run: chmod +x gradlew
 
-      # Version from the tag (v0.1.0 → versionName 0.1.0); versionCode
-      # from the run number so every release installs over the previous one.
+      # Version from the tag: v1.2.3 → versionName 1.2.3, versionCode 10203,
+      # so every higher tag installs over the previous release (re-runs and
+      # failed runs don't shift it, unlike the run number).
+      - name: Version from tag
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v([0-9]+)\.([0-9]{1,2})\.([0-9]{1,2})$ ]]; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not vMAJOR.MINOR.PATCH (minor/patch < 100)"; exit 1
+          fi
+          echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "${GITHUB_ENV}"
+          echo "VERSION_CODE=$(( 10#${BASH_REMATCH[1]} * 10000 + 10#${BASH_REMATCH[2]} * 100 + 10#${BASH_REMATCH[3]} ))" >> "${GITHUB_ENV}"
+
       - name: Unit tests + unsigned release build
         run: >
           ./gradlew testDebugUnitTest assembleRelease
-          -PappVersionName="${GITHUB_REF_NAME#v}"
-          -PappVersionCode="${{ github.run_number }}"
+          -PappVersionName="${VERSION_NAME}"
+          -PappVersionCode="${VERSION_CODE}"
 
       # The keystore exists only in repository secrets; it is decoded to the
       # runner's temp dir, used once, and never echoed or uploaded.
