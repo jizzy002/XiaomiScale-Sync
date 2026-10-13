@@ -82,6 +82,7 @@ class BleLink extends SessionHost {
     private var _faultTimer as Timer.Timer = new Timer.Timer();
     private var _connTimer as Timer.Timer = new Timer.Timer();
     private var _serviceTries as Number = 0;
+    private var _ready as Boolean = false;
     private var _current as BluetoothLowEnergy.ScanResult or Null = null;
     //! Fallback devices that failed login this app run.
     private var _rejects as Array<BluetoothLowEnergy.ScanResult> = [] as Array<BluetoothLowEnergy.ScanResult>;
@@ -117,6 +118,7 @@ class BleLink extends SessionHost {
         _busy = false;
         lastFailure = "";
         _current = null;
+        _ready = false;
         setState(LINK_SCANNING);
         log("scanning");
         BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_SCANNING);
@@ -266,21 +268,20 @@ class BleLink extends SessionHost {
         _current = result;
         setState(LINK_SEEN);
         log("scale seen (" + (byMac ? "MAC" : "soliciting 0xfe95") + "), rssi " + result.getRssi().toString());
-        // Scanning is left running until the connection completes: on this
-        // stack pairDevice's own search needs the radio still scanning.
-        if (_profileRegistered) {
-            pair();
-            return;
-        }
-        registerProfile();
-        _connTimer.start(method(:pair), PROFILE_WAIT_MS, false);
+        // Connect first, with NO profile registered: a registered 0xFE95
+        // profile filters the scale out of scanning (it carries 0xFE95 only
+        // as service data), and pairDevice's own search hits the same
+        // filter. The profile is registered after the link is up, before
+        // services are read. Scanning stays on until then (the stack's
+        // pairDevice search needs it).
+        pair();
     }
 
     function onProfileRegistered(status as Number) as Void {
         log("profile registered, status " + status.toString());
-        if (state == LINK_SEEN && _device == null) {
-            _connTimer.stop();
-            pair();
+        if (state == LINK_CONNECTED && _device != null) {
+            _serviceTries = 0;
+            resolveService();
         }
     }
 
@@ -369,7 +370,15 @@ class BleLink extends SessionHost {
             }
             _device = device;
             _serviceTries = 0;
-            resolveService();
+            setState(LINK_CONNECTED);
+            if (_profileRegistered) {
+                resolveService();
+            } else {
+                // Register now that the link is up; onProfileRegistered or
+                // the retry in resolveService drives discovery.
+                registerProfile();
+                _connTimer.start(method(:resolveService), PROFILE_WAIT_MS, false);
+            }
         } else {
             _connTimer.stop();
             _queue = [] as Array<Array>;
@@ -388,7 +397,7 @@ class BleLink extends SessionHost {
     //! the lookup is retried a few times before giving up.
     function resolveService() as Void {
         var device = _device;
-        if (device == null || state == LINK_CLOSED) {
+        if (_ready || device == null || state == LINK_CLOSED) {
             return;
         }
         var service = device.getService(BluetoothLowEnergy.stringToUuid(SERVICE));
@@ -409,8 +418,9 @@ class BleLink extends SessionHost {
                 return;
             }
         }
+        _ready = true;
+        _connTimer.stop();
         log("GATT ready after " + _serviceTries.toString() + " retries");
-        setState(LINK_CONNECTED);
         _listener.onLinkReady();
     }
 
