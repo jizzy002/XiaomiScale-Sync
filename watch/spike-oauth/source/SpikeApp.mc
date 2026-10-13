@@ -43,11 +43,13 @@ class SpikeApp extends Application.AppBase {
 
     //! Garmin portal SSO (same constants as the Android client's
     //! PORTAL_SSO_CLIENT_ID / PORTAL_SERVICE_URL). Params match the
-    //! reference web-login flow (python-garminconnect): clientId, an
-    //! percent-encoded service, consumeServiceTicket. makeOAuthRequest
-    //! opens the sign-in page in the phone's Garmin Connect app; on
-    //! success the redirect carries ?ticket=... to the result URL, which
-    //! the registerForOAuthMessages callback then receives.
+    //! reference web-login flow (python-garminconnect): clientId and an
+    //! percent-encoded service — but NOT consumeServiceTicket: that flag
+    //! makes Garmin's own JS eat the ticket so it never appears in the
+    //! redirect URL, and GCM's OAuth webview only returns a ticket to the
+    //! watch when the result URL carries ?ticket=... . After sign-in the
+    //! redirect to the result URL carries the ticket, which GCM matches
+    //! against resultUrl and hands to registerForOAuthMessages.
     function startSignIn() as Void {
         _view.setStatus("Opening\nsign-in...", null);
         WatchUi.requestUpdate();
@@ -55,8 +57,7 @@ class SpikeApp extends Application.AppBase {
             "https://sso.garmin.com/sso/signin",
             {
                 "clientId" => "GarminConnect",
-                "service" => Communications.encodeURL("https://connect.garmin.com/app"),
-                "consumeServiceTicket" => "true"
+                "service" => Communications.encodeURL("https://connect.garmin.com/app")
             },
             "https://connect.garmin.com/app",
             Communications.OAUTH_RESULT_TYPE_URL,
