@@ -63,7 +63,7 @@ class BleLink extends SessionHost {
     private static const FC_SOLICIT = 0x0200;
     private static const MAX_LOGGED = 16;
 
-    private static const CONNECT_TIMEOUT_MS = 45000; // room to answer a connect prompt on the watch
+    private static const CONNECT_TIMEOUT_MS = 12000; // short, so retries cycle the scale's solicit beacons
     private static const SERVICE_RETRY_MS = 500;
     private static const SERVICE_RETRIES = 20; // discovery after connect can take several seconds
     //! If onProfileRegister never arrives, pair anyway after this.
@@ -101,10 +101,12 @@ class BleLink extends SessionHost {
         _events = new BleEvents(self);
         BluetoothLowEnergy.setDelegate(_events);
         clearStalePairings();
-        // The profile is NOT registered here: device logs show that with
-        // the 0xFE95 profile registered, pairDevice never completes a
-        // connection to the scale, yet it connects fine with no profile.
-        // It is registered after the link is up (registerProfile).
+        // Register up front: Connect IQ discovers a device's services only
+        // at connect time, for profiles registered beforehand (device log:
+        // a profile registered after connect never yields services). The
+        // scale is connected only while it solicits, so connect() gates on
+        // the solicit beacon and the controller retries across the window.
+        registerProfile();
     }
 
     //! `mac` is the normalised "AA:BB:CC:DD:EE:FF" form.
@@ -276,9 +278,6 @@ class BleLink extends SessionHost {
 
     function onProfileRegistered(status as Number) as Void {
         log("profile registered, status " + status.toString());
-        if (state == LINK_CONNECTED && !_ready) {
-            resolveService();
-        }
     }
 
     private function registerProfile() as Void {
@@ -367,9 +366,6 @@ class BleLink extends SessionHost {
             _device = device;
             _serviceTries = 0;
             setState(LINK_CONNECTED);
-            if (!_profileRegistered) {
-                registerProfile();
-            }
             resolveService();
         } else {
             _connTimer.stop();
@@ -482,13 +478,16 @@ class BleLink extends SessionHost {
                 }
             }
         }
+        var soliciting = fc >= 0 && (fc & FC_SOLICIT) != 0;
         if (addr || fc >= 0) {
             logAdvertiser(r, data, fc, addr, beaconMac);
         }
         if (addr || beaconMac) {
-            return MATCH_MAC;
+            // The scale accepts a connection only while soliciting. If we
+            // cannot read the solicit bit (no service data), try anyway.
+            return (soliciting || fc < 0) ? MATCH_MAC : MATCH_NONE;
         }
-        if (fc >= 0 && (fc & FC_SOLICIT) != 0 && !isRejected(r)) {
+        if (soliciting && !isRejected(r)) {
             return MATCH_SOLICIT;
         }
         return MATCH_NONE;

@@ -27,8 +27,8 @@ class SyncController extends LinkListener {
     private static const DEFAULT_PROFILE_WEIGHT = 8000;
     //! Connection attempts per app open (the scale keeps asking to be
     //! collected for ~5 minutes after a weigh-in, so retries are cheap).
-    private static const MAX_ATTEMPTS = 3;
-    private static const RETRY_DELAY_MS = 1500;
+    private static const MAX_ATTEMPTS = 10; // the scale solicits for ~5 min; keep catching beacons
+    private static const RETRY_DELAY_MS = 800;
 
     var model as UiModel = new UiModel();
 
