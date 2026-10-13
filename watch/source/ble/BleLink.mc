@@ -116,14 +116,7 @@ class BleLink extends SessionHost {
         _queue = [] as Array<Array>;
         _busy = false;
         lastFailure = "";
-        var seen = _current;
-        if (seen != null && _profileRegistered) {
-            // Device log: once the profile is registered, scans report
-            // nothing, so a retry reconnects to the scale seen earlier.
-            log("reconnecting to the scale seen earlier");
-            connect(seen, matchedByMac);
-            return;
-        }
+        _current = null;
         setState(LINK_SCANNING);
         log("scanning");
         BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_SCANNING);
@@ -273,7 +266,8 @@ class BleLink extends SessionHost {
         _current = result;
         setState(LINK_SEEN);
         log("scale seen (" + (byMac ? "MAC" : "soliciting 0xfe95") + "), rssi " + result.getRssi().toString());
-        BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_OFF);
+        // Scanning is left running until the connection completes: on this
+        // stack pairDevice's own search needs the radio still scanning.
         if (_profileRegistered) {
             pair();
             return;
@@ -369,6 +363,10 @@ class BleLink extends SessionHost {
         }
         if (connState == BluetoothLowEnergy.CONNECTION_STATE_CONNECTED) {
             _connTimer.stop();
+            try {
+                BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_OFF);
+            } catch (e) {
+            }
             _device = device;
             _serviceTries = 0;
             resolveService();
