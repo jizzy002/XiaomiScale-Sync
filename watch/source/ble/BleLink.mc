@@ -63,7 +63,7 @@ class BleLink extends SessionHost {
     private static const FC_SOLICIT = 0x0200;
     private static const MAX_LOGGED = 16;
 
-    private static const CONNECT_TIMEOUT_MS = 15000;
+    private static const CONNECT_TIMEOUT_MS = 45000; // room to answer a connect prompt on the watch
     private static const SERVICE_RETRY_MS = 500;
     private static const SERVICE_RETRIES = 6;
     //! If onProfileRegister never arrives, pair anyway after this.
@@ -111,11 +111,18 @@ class BleLink extends SessionHost {
         _macBytes = AppConfig.macBytes(mac) as ByteArray;
         _session = null;
         _device = null;
-        _current = null;
         _chars = [null, null, null, null];
         _queue = [] as Array<Array>;
         _busy = false;
         lastFailure = "";
+        var seen = _current;
+        if (seen != null && _profileRegistered) {
+            // Device log: once the profile is registered, scans report
+            // nothing, so a retry reconnects to the scale seen earlier.
+            log("reconnecting to the scale seen earlier");
+            connect(seen, matchedByMac);
+            return;
+        }
         setState(LINK_SCANNING);
         log("scanning");
         BluetoothLowEnergy.setScanState(BluetoothLowEnergy.SCAN_STATE_SCANNING);
@@ -257,6 +264,7 @@ class BleLink extends SessionHost {
         if (c != null) {
             _rejects.add(c);
         }
+        _current = null;
     }
 
     private function connect(result as BluetoothLowEnergy.ScanResult, byMac as Boolean) as Void {
@@ -339,7 +347,8 @@ class BleLink extends SessionHost {
             if (s != null) {
                 s.onLinkLost();
             } else {
-                failLink(state == LINK_SEEN ? "Connect failed" : "Disconnected");
+                failLink(connState == BluetoothLowEnergy.CONNECTION_STATE_REJECTED ? "Connection rejected"
+                    : state == LINK_SEEN ? "Connect failed" : "Disconnected");
             }
         }
     }
