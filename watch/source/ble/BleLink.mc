@@ -101,6 +101,14 @@ class BleLink extends SessionHost {
         _events = new BleEvents(self);
         BluetoothLowEnergy.setDelegate(_events);
         clearStalePairings();
+        // Ask for the lightest connection (no bonding); the S200 uses
+        // app-level miauth, not a BLE bond. Guarded: the API is 5.1.0+.
+        if (BluetoothLowEnergy has :setConnectionStrategy) {
+            try {
+                BluetoothLowEnergy.setConnectionStrategy(BluetoothLowEnergy.CONNECTION_STRATEGY_DEFAULT);
+            } catch (e) {
+            }
+        }
         // Register up front: Connect IQ discovers a device's services only
         // at connect time, for profiles registered beforehand (device log:
         // a profile registered after connect never yields services). The
