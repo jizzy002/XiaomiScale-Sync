@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Frame raw phone screenshots in a drawn Galaxy S24 Ultra-style body.
 
-Reads <raw_dir>/<screen>-<theme>.png (screen: home, history, profile;
-theme: light, dark), as taken with `adb exec-out screencap -p`, and writes:
+Reads <raw_dir>/<screen>-<theme>.png (theme: light, dark), as taken with
+`adb exec-out screencap -p`, and writes for every set in SETS whose files
+are present:
 
   <out_dir>/<screen>-<theme>.png   one framed phone, transparent background
-  <out_dir>/showcase-<theme>.png   the three screens side by side
+  <out_dir>/<set>-<theme>.png      the set's screens side by side
+
+Sets: showcase (home, history, profile), setup (setup-1 .. setup-5).
 
 The frame is drawn, not a mockup image: titanium shell with near-square
 corners, thin black bezel, centred punch-hole camera, side keys. All sizes
@@ -19,7 +22,10 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-SCREENS = ["home", "history", "profile"]
+SETS = {
+    "showcase": ["home", "history", "profile"],
+    "setup": [f"setup-{n}" for n in range(1, 6)],
+}
 THEMES = ["light", "dark"]
 
 PHONE_WIDTH = 600   # framed single-phone output width (px)
@@ -110,20 +116,20 @@ def main():
         sys.exit(__doc__)
     raw_dir, out_dir = Path(sys.argv[1]), Path(sys.argv[2])
     out_dir.mkdir(parents=True, exist_ok=True)
-    for theme in THEMES:
-        phones = []
-        for screen in SCREENS:
-            src = raw_dir / f"{screen}-{theme}.png"
-            if not src.exists():
-                print(f"skip {src} (missing)")
-                continue
-            framed = frame(Image.open(src))
-            framed.save(out_dir / f"{screen}-{theme}.png", optimize=True)
-            phones.append(framed)
-            print(f"wrote {out_dir / f'{screen}-{theme}.png'}")
-        if phones:
-            showcase(phones).save(out_dir / f"showcase-{theme}.png", optimize=True)
-            print(f"wrote {out_dir / f'showcase-{theme}.png'}")
+    for set_name, screens in SETS.items():
+        for theme in THEMES:
+            phones = []
+            for screen in screens:
+                src = raw_dir / f"{screen}-{theme}.png"
+                if not src.exists():
+                    continue
+                framed = frame(Image.open(src))
+                framed.save(out_dir / f"{screen}-{theme}.png", optimize=True)
+                phones.append(framed)
+                print(f"wrote {out_dir / f'{screen}-{theme}.png'}")
+            if phones:
+                showcase(phones).save(out_dir / f"{set_name}-{theme}.png", optimize=True)
+                print(f"wrote {out_dir / f'{set_name}-{theme}.png'}")
 
 
 if __name__ == "__main__":

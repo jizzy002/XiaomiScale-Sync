@@ -46,6 +46,10 @@ debug build first (this clears the app's data; you will set it up again).
 
 ## Setting up
 
+<p align="center">
+  <img alt="Setup wizard: scale keys, profile, history, Garmin, done" src="docs/screenshots/setup-dark.png" width="100%">
+</p>
+
 The wizard walks you through five steps:
 
 1. **Scale keys.** Sign in with your Mi account (the one the scale is paired
@@ -133,7 +137,7 @@ Requires JDK 17.
 
 The README screenshots are framed with `scripts/frame_screenshots.py`
 (needs Pillow): save `<screen>-<theme>.png` captures (screen: `home`,
-`history`, `profile`; theme: `light`, `dark`) from
+`history`, `profile`, `setup-1` … `setup-5`; theme: `light`, `dark`) from
 `adb exec-out screencap -p` in a folder and run
 `python scripts/frame_screenshots.py <folder> docs/screenshots`.
 
