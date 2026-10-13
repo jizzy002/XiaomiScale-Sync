@@ -24,3 +24,9 @@ captures/
 
 # Owner's Next.js design prototype — kept locally, not part of the app (plain Material 3 chosen)
 app-design/
+
+# Connect IQ watch app — build output and signing material
+*.der
+*.prg
+*.iq
+watch/**/bin/
