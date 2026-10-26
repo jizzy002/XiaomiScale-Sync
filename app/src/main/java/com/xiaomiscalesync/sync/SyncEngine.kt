@@ -50,7 +50,7 @@ import java.time.Clock
  *    `5.4` (p4 = `mid,user_type,weight,flag,ts`) when the weighing ends.
  *
  * Binding rulings (progress ledger / dispatch):
- *  - weights are 1/100 kg integers despite the `weightGrams` name;
+ *  - weights are stored as integer centi-kilograms;
  *  - implausible timestamps (before 2024-01-01 or more than 300 s in the
  *    future) are replaced with the receive time; implausible weights
  *    (outside 100..30000) are discarded before they reach the merger;
@@ -288,9 +288,9 @@ class SyncEngine(
         val weight = f[3].toIntOrNull() ?: return null
         val flag = f[4].toIntOrNull() ?: return null
         val ts = f[5].toLongOrNull() ?: return null
-        if (weight !in MIN_WEIGHT100..MAX_WEIGHT100) return null // implausible weight: discarded
+        if (weight !in MIN_WEIGHT_CENTIKG..MAX_WEIGHT_CENTIKG) return null // implausible weight: discarded
         return NewWeighIn(
-            weightGrams = weight,
+            weightCentiKg = weight,
             recordedAt = saneTs(ts, receiveUnix),
             source = WeighInSource.STORED,
             recordNo = recordNo,
@@ -318,12 +318,12 @@ class SyncEngine(
                 IID_LIVE_WEIGHT -> {
                     val stable = (msg.params[2] as? Int) == 1
                     val weight = msg.params[3] as? Int
-                    if (weight != null && weight in MIN_WEIGHT100..MAX_WEIGHT100) {
+                    if (weight != null && weight in MIN_WEIGHT_CENTIKG..MAX_WEIGHT_CENTIKG) {
                         _state.update { it.copy(live = LiveReading(weight, stable)) }
                     }
-                    if (stable && weight != null && weight in MIN_WEIGHT100..MAX_WEIGHT100) {
+                    if (stable && weight != null && weight in MIN_WEIGHT_CENTIKG..MAX_WEIGHT_CENTIKG) {
                         lastStable = NewWeighIn(
-                            weightGrams = weight,
+                            weightCentiKg = weight,
                             recordedAt = clock.instant().epochSecond,
                             source = WeighInSource.LIVE,
                             recordNo = null,
@@ -366,9 +366,9 @@ class SyncEngine(
         val memberMid = f[0].toLongOrNull() ?: return null
         val weight = f[2].toIntOrNull() ?: return null
         val flag = f[3].toIntOrNull() ?: return null
-        if (weight !in MIN_WEIGHT100..MAX_WEIGHT100) return null
+        if (weight !in MIN_WEIGHT_CENTIKG..MAX_WEIGHT_CENTIKG) return null
         return NewWeighIn(
-            weightGrams = weight,
+            weightCentiKg = weight,
             recordedAt = clock.instant().epochSecond,
             source = WeighInSource.LIVE,
             recordNo = null,
@@ -439,11 +439,11 @@ class SyncEngine(
             val eldest = seenEventKeys.first()
             seenEventKeys.remove(eldest)
         }
-        if (weighIn.weightGrams !in MIN_WEIGHT100..MAX_WEIGHT100) return false
+        if (weighIn.weightCentiKg !in MIN_WEIGHT_CENTIKG..MAX_WEIGHT_CENTIKG) return false
         repo.merge(
             listOf(
                 NewWeighIn(
-                    weightGrams = weighIn.weightGrams,
+                    weightCentiKg = weighIn.weightCentiKg,
                     recordedAt = saneTs(weighIn.unixTs, clock.instant().epochSecond),
                     source = WeighInSource.BROADCAST,
                     recordNo = null,
@@ -482,7 +482,7 @@ class SyncEngine(
             age = p.age,
             sex = p.sex,
             heightCm = p.heightCm,
-            weightGrams = p.weightGrams,
+            weightCentiKg = p.weightCentiKg,
             nowUnix = clock.instant().epochSecond,
         )
     }
@@ -499,8 +499,8 @@ class SyncEngine(
         const val MAX_FUTURE_SKEW_S = 300L
 
         /** Weight plausibility, 1/100 kg: 1 kg .. 300 kg. */
-        const val MIN_WEIGHT100 = 100
-        const val MAX_WEIGHT100 = 30000
+        const val MIN_WEIGHT_CENTIKG = 100
+        const val MAX_WEIGHT_CENTIKG = 30000
 
         /** Live event iids (siid 5). */
         const val IID_LIVE_WEIGHT = 3
@@ -585,4 +585,4 @@ data class EngineState(
 )
 
 /** One live 5.3 weight (1/100 kg) and whether the scale marked it stable. */
-data class LiveReading(val weightGrams: Int, val stable: Boolean)
+data class LiveReading(val weightCentiKg: Int, val stable: Boolean)

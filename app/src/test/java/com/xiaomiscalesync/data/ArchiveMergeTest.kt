@@ -10,7 +10,7 @@ import org.junit.Test
  * function over lists, exactly what the plan's Task 8 extracts.
  *
  * Units: every weight is 1/100 kg (8025 = 80.25 kg) per the on-record ruling,
- * despite the plan-wide field name `weightGrams`.
+ * despite the plan-wide field name `weightCentiKg`.
  */
 class ArchiveMergeTest {
 
@@ -20,13 +20,13 @@ class ArchiveMergeTest {
     private fun settings(cutoff: Long? = null) = MergeSettings(mid = ourMid, backfillCutoff = cutoff)
 
     private fun ns(
-        weightGrams: Int = 8025,
+        weightCentiKg: Int = 8025,
         recordedAt: Long = 1_790_000_000L,
         source: WeighInSource = WeighInSource.STORED,
         recordNo: Long? = null,
         scaleFlag: Int = 0,
         memberMid: Long = 1L,
-    ) = NewWeighIn(weightGrams, recordedAt, source, recordNo, scaleFlag, memberMid)
+    ) = NewWeighIn(weightCentiKg, recordedAt, source, recordNo, scaleFlag, memberMid)
 
     // --- (a) dedupe -----------------------------------------------------------
 
@@ -52,7 +52,7 @@ class ArchiveMergeTest {
     fun duplicateKeepsFirstRecordNoAndDoesNotOverwrite() {
         val existing = listOf(
             WeighInRecord(
-                id = 7, weightGrams = 8025, recordedAt = 1_790_000_000L,
+                id = 7, weightCentiKg = 8025, recordedAt = 1_790_000_000L,
                 source = WeighInSource.STORED, recordNo = 41, scaleFlag = 0,
                 memberMid = 1, category = Category.MINE, garminStatus = GarminStatus.PENDING,
                 pushedAt = null, createdAt = now,
@@ -66,17 +66,17 @@ class ArchiveMergeTest {
 
     @Test
     fun dedupeKeyIsTimestampPlusWeight() {
-        val base = ns(weightGrams = 8025, recordedAt = 1_790_000_000L)
+        val base = ns(weightCentiKg = 8025, recordedAt = 1_790_000_000L)
         val existing = listOf(
             WeighInRecord(
-                id = 1, weightGrams = 8025, recordedAt = 1_790_000_000L,
+                id = 1, weightCentiKg = 8025, recordedAt = 1_790_000_000L,
                 source = WeighInSource.STORED, recordNo = 41, scaleFlag = 0,
                 memberMid = 1, category = Category.MINE, garminStatus = GarminStatus.PENDING,
                 pushedAt = null, createdAt = now,
             ),
         )
         // Same ts, different weight → insert.
-        assertEquals(1, ArchiveMerger.merge(existing, listOf(base.copy(weightGrams = 7260)), settings(), now).inserts.size)
+        assertEquals(1, ArchiveMerger.merge(existing, listOf(base.copy(weightCentiKg = 7260)), settings(), now).inserts.size)
         // Same weight, different ts → insert.
         assertEquals(1, ArchiveMerger.merge(existing, listOf(base.copy(recordedAt = 1_790_000_060L)), settings(), now).inserts.size)
         // Exact (ts, weight) hit → duplicate.
@@ -145,8 +145,8 @@ class ArchiveMergeTest {
         val plan = ArchiveMerger.merge(
             emptyList(),
             listOf(
-                ns(weightGrams = 8000, recordedAt = 1_790_000_001L), // after: strict >
-                ns(weightGrams = 8100, recordedAt = 1_790_000_000L), // exactly at cutoff: strict < means pushable
+                ns(weightCentiKg = 8000, recordedAt = 1_790_000_001L), // after: strict >
+                ns(weightCentiKg = 8100, recordedAt = 1_790_000_000L), // exactly at cutoff: strict < means pushable
             ),
             settings(cutoff = 1_790_000_000L),
             now,
@@ -158,7 +158,7 @@ class ArchiveMergeTest {
     fun nullCutoffPushesEverythingRegardlessOfAge() {
         val plan = ArchiveMerger.merge(
             emptyList(),
-            listOf(ns(weightGrams = 8000, recordedAt = 1_600_000_000L)),
+            listOf(ns(weightCentiKg = 8000, recordedAt = 1_600_000_000L)),
             settings(cutoff = null),
             now,
         )
@@ -187,13 +187,13 @@ class ArchiveMergeTest {
         val receiveTime = 1_790_000_050L
         val plan = ArchiveMerger.merge(
             emptyList(),
-            listOf(ns(recordedAt = receiveTime, weightGrams = 7215)),
+            listOf(ns(recordedAt = receiveTime, weightCentiKg = 7215)),
             settings(cutoff = null),
             now,
         )
         val row = plan.inserts.single()
         assertEquals(receiveTime, row.recordedAt)
-        assertEquals(7215, row.weightGrams)
+        assertEquals(7215, row.weightCentiKg)
         assertEquals(GarminStatus.PENDING, row.garminStatus)
     }
 

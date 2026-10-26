@@ -45,7 +45,7 @@ data class OnboardingState(
     val manualToken: String = "",
     val manualBleKey: String = "",
 
-    // Step 2 — profile (kg is fixed in v1; only these fields are edited).
+    // Step 2 — scale profile values (height, age and sex; weight is supplied by the scale).
     val heightCm: String = "",
     val age: String = "",
     val sex: Int = 1,

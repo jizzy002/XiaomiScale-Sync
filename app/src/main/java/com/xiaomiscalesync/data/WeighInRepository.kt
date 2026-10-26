@@ -26,7 +26,7 @@ class WeighInRepository(
             nowUnix = nowUnix(),
         )
         // Inserts are IGNORE-on-conflict: a concurrent merge that won the race
-        // for the same (recordedAt, weightGrams) key makes Room return -1 here
+        // for the same (recordedAt, weightCentiKg) key makes Room return -1 here
         // rather than throw — count only the rows that actually landed.
         var inserted = 0
         for (row in plan.inserts) if (dao.insert(row) != -1L) inserted++
@@ -36,6 +36,15 @@ class WeighInRepository(
 
     fun observe(category: Category?): Flow<List<WeighInRecord>> =
         if (category == null) dao.observeAll() else dao.observeByCategory(category)
+
+    /** Exports the local archive only; credentials and account settings are not part of this data. */
+    suspend fun exportBackup(): String = ArchiveBackup.encode(dao.all().sortedBy { it.recordedAt })
+
+    /** Validates the complete file before writing; existing rows win on dedupe conflicts. */
+    suspend fun restoreBackup(json: String): Int {
+        val records = ArchiveBackup.decode(json)
+        return dao.insertAll(records).count { it != -1L }
+    }
 
     /** Review action: approve a needs-review row as the owner's own (→ pushable). */
     suspend fun approve(id: Long) = dao.setCategory(id, Category.MINE)

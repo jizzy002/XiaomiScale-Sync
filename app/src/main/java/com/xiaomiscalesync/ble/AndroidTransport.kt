@@ -323,7 +323,12 @@ class AndroidTransport private constructor(
         val characteristic = requireChars().getValue(char)
         val cccd = characteristic.getDescriptor(CCCD_UUID)
             ?: throw ProtocolError("characteristic $char has no CCCD (0x2902)")
-        if (!gatt.setCharacteristicNotification(characteristic, true)) {
+        val notificationsEnabled = try {
+            gatt.setCharacteristicNotification(characteristic, true)
+        } catch (e: SecurityException) {
+            throw ProtocolError("BLUETOOTH_CONNECT permission missing (${e.message})")
+        }
+        if (!notificationsEnabled) {
             throw ProtocolError("setCharacteristicNotification failed for $char")
         }
         val done = CompletableDeferred<Int>()
@@ -381,7 +386,11 @@ class AndroidTransport private constructor(
         } catch (_: SecurityException) {
             // Already torn down or permission revoked mid-close: closing still proceeds.
         }
-        gatt.close()
+        try {
+            gatt.close()
+        } catch (_: SecurityException) {
+            // Permission may be revoked while the connection is being torn down.
+        }
         failAll(ProtocolError("link closed"))
         log("GATT link closed")
     }

@@ -422,7 +422,7 @@ open class GarminClient(
      * the weight in kg. Re-uploading the same timestamp/value is how Garmin
      * behaves — dedupe stays on our side.
      */
-    open suspend fun addWeighIn(weightGrams: Int, localTs: ZonedDateTime) {
+    open suspend fun addWeighIn(weightCentiKg: Int, localTs: ZonedDateTime) {
         withContext(Dispatchers.IO) {
             val tokens = authenticated()
             val payload = JsonObject().apply {
@@ -430,7 +430,7 @@ open class GarminClient(
                 addProperty("gmtTimestamp", TIMESTAMP.format(localTs.withZoneSameInstant(ZoneOffset.UTC)))
                 addProperty("unitKey", "kg")
                 addProperty("sourceType", "MANUAL")
-                add("value", JsonPrimitive(BigDecimal(String.format(Locale.US, "%.2f", weightGrams / 100.0))))
+                add("value", JsonPrimitive(BigDecimal(String.format(Locale.US, "%.2f", weightCentiKg / 100.0))))
             }
             val path = "/weight-service/user-weight"
             val response = execute(

@@ -136,7 +136,7 @@ class FakeScale(
     val appCounters = CopyOnWriteArrayList<Int>()
 
     /**
-     * When set, action 6.1 injects this live 5.3 event (weightGrams,
+     * When set, action 6.1 injects this live 5.3 event (weightCentiKg,
      * stable) toward the app the moment the action arrives — strictly
      * before its result goes on the wire.
      */
@@ -485,14 +485,14 @@ class FakeScale(
      * Injects a live 5.3 weigh-in event (p2 = stable, p3 = weight) toward
      * the app — tests use this to race events against pending requests.
      */
-    suspend fun emitLive(weightGrams: Int, stable: Boolean) {
+    suspend fun emitLive(weightCentiKg: Int, stable: Boolean) {
         check(::transport.isInitialized) { "call accept() first" }
         val body = MiotCodec.event(
             5,
             3,
             listOf(
                 MiotCodec.param(2, ParamType.U8, if (stable) 1 else 0),
-                MiotCodec.param(3, ParamType.U16, weightGrams),
+                MiotCodec.param(3, ParamType.U16, weightCentiKg),
             ),
         )
         replySession(transport, nextEventTid(), MiotCodec.OP_EVENT, body)
@@ -504,12 +504,12 @@ class FakeScale(
      * exactly the reference protocol's shape. SyncEngine commits at most
      * one LIVE archive record per session from this event.
      */
-    suspend fun emitFinished(mid: Long, userType: Int, weightGrams: Int, flag: Int, ts: Long) {
+    suspend fun emitFinished(mid: Long, userType: Int, weightCentiKg: Int, flag: Int, ts: Long) {
         check(::transport.isInitialized) { "call accept() first" }
         val body = MiotCodec.event(
             5,
             4,
-            listOf(MiotCodec.param(4, ParamType.STRING, "$mid,$userType,$weightGrams,$flag,$ts")),
+            listOf(MiotCodec.param(4, ParamType.STRING, "$mid,$userType,$weightCentiKg,$flag,$ts")),
         )
         replySession(transport, nextEventTid(), MiotCodec.OP_EVENT, body)
     }

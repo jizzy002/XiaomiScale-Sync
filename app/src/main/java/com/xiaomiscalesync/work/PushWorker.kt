@@ -10,6 +10,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.xiaomiscalesync.AppGraph
+import com.xiaomiscalesync.data.SyncActivityMapper
 import com.xiaomiscalesync.garmin.GarminPusher
 import com.xiaomiscalesync.garmin.PushSummary
 import kotlin.coroutines.cancellation.CancellationException
@@ -44,12 +45,25 @@ class PushWorker(
     override suspend fun doWork(): Result {
         val pusher = pusherFactory(applicationContext)
             ?: return Result.success() // not wired yet — nothing to push, nothing to retry
-        return runGarminPush(pusher::pushPending) { t ->
-            // Hygiene: our exception texts carry only paths and HTTP codes; a
-            // Garmin token never appears in them (TokenStore/GarminTokens
-            // redact toString — Task 11), so the message is safe to log.
-            Log.w(TAG, "Garmin push pass failed unexpectedly; retrying with backoff", t)
-        }
+        val graph = AppGraph.of(applicationContext)
+        return runGarminPush(
+            push = pusher::pushPending,
+            record = { summary, unexpected ->
+                val now = System.currentTimeMillis() / 1000
+                when {
+                    summary != null -> graph.syncActivity.recordGarmin(summary, now)
+                    unexpected != null -> graph.syncActivity.record(
+                        SyncActivityMapper.unexpectedGarminFailure(now),
+                    )
+                }
+            },
+            log = { t ->
+                // Hygiene: our exception texts carry only paths and HTTP codes; a
+                // Garmin token never appears in them (TokenStore/GarminTokens
+                // redact toString — Task 11), so the message is safe to log.
+                Log.w(TAG, "Garmin push pass failed unexpectedly; retrying with backoff", t)
+            },
+        )
     }
 
     companion object {
@@ -178,9 +192,13 @@ internal suspend fun enqueueIfPending(
  */
 internal suspend fun runGarminPush(
     push: suspend () -> PushSummary,
+    record: suspend (PushSummary?, Throwable?) -> Unit = { _, _ -> },
     log: (Throwable) -> Unit,
 ): ListenableWorker.Result = try {
     val summary = push()
+    if (summary.pushed > 0 || summary.skippedExisting > 0 || summary.failed > 0) {
+        recordSafely(record, summary, null)
+    }
     when {
         summary.authBlocked -> ListenableWorker.Result.success()
         summary.failed > 0 -> ListenableWorker.Result.retry()
@@ -189,6 +207,21 @@ internal suspend fun runGarminPush(
 } catch (c: CancellationException) {
     throw c
 } catch (t: Throwable) {
+    recordSafely(record, null, t)
     log(t)
     ListenableWorker.Result.retry()
+}
+
+private suspend fun recordSafely(
+    record: suspend (PushSummary?, Throwable?) -> Unit,
+    summary: PushSummary?,
+    failure: Throwable?,
+) {
+    try {
+        record(summary, failure)
+    } catch (c: CancellationException) {
+        throw c
+    } catch (_: Throwable) {
+        // Logging must not turn a successful push into a failed WorkSpec.
+    }
 }

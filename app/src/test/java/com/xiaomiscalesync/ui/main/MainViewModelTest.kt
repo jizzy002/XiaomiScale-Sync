@@ -40,7 +40,7 @@ class MainViewModelTest {
         source: WeighInSource = WeighInSource.BROADCAST,
     ) = WeighInRecord(
         id = id,
-        weightGrams = 8025,
+        weightCentiKg = 8025,
         recordedAt = recordedAt,
         source = source,
         recordNo = null,
@@ -175,24 +175,24 @@ class MainViewModelTest {
     // ------------------------------------------------- recent list + deltas
 
     @Test
-    fun recentListsTheNextFourAfterTheLatestNewestFirst() {
+    fun recentListsTheLatestAndNextFourNewestFirst() {
         val records = (1..7L).map { record(id = it, recordedAt = it * 100) }
         val s = MainUi.reduce(EngineState(), records, t0, t0)
         assertEquals(7L, s.latest!!.id)
-        assertEquals(listOf(6L, 5L, 4L, 3L), s.recent.map { it.id })
+        assertEquals(listOf(7L, 6L, 5L, 4L, 3L), s.recent.map { it.id })
     }
 
     @Test
     fun deltaIsAgainstTheOwnersPreviousWeighInSkippingOthers() {
         val records = listOf(
-            record(id = 1, recordedAt = 100).copy(weightGrams = 8500),
-            record(id = 2, recordedAt = 200, category = Category.NEEDS_REVIEW).copy(weightGrams = 6000),
-            record(id = 3, recordedAt = 300).copy(weightGrams = 8420),
+            record(id = 1, recordedAt = 100).copy(weightCentiKg = 8500),
+            record(id = 2, recordedAt = 200, category = Category.NEEDS_REVIEW).copy(weightCentiKg = 6000),
+            record(id = 3, recordedAt = 300).copy(weightCentiKg = 8420),
         )
         val s = MainUi.reduce(EngineState(), records, t0, t0)
-        assertEquals("guest row in between is ignored", -80, s.latest!!.deltaGrams)
-        assertNull("no delta for a row that is not the owner's", s.recent.first { it.id == 2L }.deltaGrams)
-        assertNull("the owner's first weigh-in has nothing to compare", s.recent.first { it.id == 1L }.deltaGrams)
+        assertEquals("guest row in between is ignored", -80, s.latest!!.deltaCentiKg)
+        assertNull("no delta for a row that is not the owner's", s.recent.first { it.id == 2L }.deltaCentiKg)
+        assertNull("the owner's first weigh-in has nothing to compare", s.recent.first { it.id == 1L }.deltaCentiKg)
     }
 
     // ---------------------------------------------------- garmin push line
@@ -217,6 +217,18 @@ class MainViewModelTest {
         assertEquals(GarminLine.Waiting(2, retrying = false), line(PushState.IDLE))
         assertEquals(GarminLine.Waiting(2, retrying = true), line(PushState.RETRY_SCHEDULED))
         assertEquals(GarminLine.Pushing(2), line(PushState.RUNNING))
+    }
+
+    @Test
+    fun authBlockedRowsAreNeverReportedAsFullySynced() {
+        val records = listOf(
+            record(id = 1, status = GarminStatus.AUTH_REQUIRED),
+            record(id = 2, recordedAt = 200, status = GarminStatus.PENDING),
+        )
+        assertEquals(GarminLine.Waiting(1, retrying = false, authBlocked = 1),
+            MainUi.reduce(EngineState(), records, t0, t0).garmin)
+        assertEquals(GarminLine.Waiting(0, retrying = false, authBlocked = 1),
+            MainUi.reduce(EngineState(), listOf(records.first()), t0, t0).garmin)
     }
 
     @Test

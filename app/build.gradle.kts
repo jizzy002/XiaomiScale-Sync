@@ -13,9 +13,16 @@ android {
         applicationId = "com.xiaomiscalesync"
         minSdk = 26
         targetSdk = 37
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Release CI passes these from the tag / run number; local builds keep the defaults.
         versionCode = providers.gradleProperty("appVersionCode").orNull?.toInt() ?: 1
         versionName = providers.gradleProperty("appVersionName").orNull ?: "0.1.0-dev"
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+        }
     }
 
     compileOptions {
@@ -33,6 +40,7 @@ dependencies {
     implementation(composeBom)
 
     implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.core:core-splashscreen:1.2.0")
     implementation("androidx.compose.material3:material3")
     // Channels/suspend for the BleTransport seam (was only transitive via Compose)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
@@ -53,4 +61,9 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
+
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("junit:junit:4.13.2")
 }

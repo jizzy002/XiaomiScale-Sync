@@ -17,9 +17,8 @@ enum class Category { MINE, NEEDS_REVIEW, GUEST }
 enum class GarminStatus { PENDING, PUSHED, SKIPPED_EXISTING, AUTH_REQUIRED }
 
 /**
- * One archived weigh-in. Weights are 1/100 kg (8025 = 80.25 kg) — the
- * plan-wide field name `weightGrams` is kept verbatim despite the unit
- * (global rename deferred to final review).
+ * One archived weigh-in. [weightCentiKg] is stored in 1/100 kg increments
+ * (8025 = 80.25 kg), matching the scale's native resolution.
  *
  * The unique index is the dedupe key (recordedAt unix second, weight): the
  * archive can never hold the same weigh-in twice, even if the merger were
@@ -27,11 +26,11 @@ enum class GarminStatus { PENDING, PUSHED, SKIPPED_EXISTING, AUTH_REQUIRED }
  */
 @Entity(
     tableName = "weigh_ins",
-    indices = [Index(value = ["recordedAt", "weightGrams"], unique = true)],
+    indices = [Index(value = ["recordedAt", "weightCentiKg"], unique = true)],
 )
 data class WeighInRecord(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val weightGrams: Int,
+    val weightCentiKg: Int,
     val recordedAt: Long,
     val source: WeighInSource,
     val recordNo: Long?,
@@ -45,7 +44,7 @@ data class WeighInRecord(
 
 /** A weigh-in seen for the first time, before classification. */
 data class NewWeighIn(
-    val weightGrams: Int,
+    val weightCentiKg: Int,
     val recordedAt: Long,
     val source: WeighInSource,
     val recordNo: Long?,

@@ -1,6 +1,7 @@
 package com.xiaomiscalesync.data
 
 import android.content.Context
+import androidx.core.content.edit
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.xiaomiscalesync.garmin.GarminTokens
@@ -217,16 +218,16 @@ class Secrets(context: Context) : KeyVault, KeyReader, TokenStore {
         val expires = tokens.expiresAtMillis
         put(KEY_GARMIN_ACCESS, tokens.accessToken)
         if (refresh != null) put(KEY_GARMIN_REFRESH, refresh)
-        else prefs.edit().remove(KEY_GARMIN_REFRESH).apply()
+        else prefs.edit { remove(KEY_GARMIN_REFRESH) }
         put(KEY_GARMIN_CLIENT, tokens.clientId)
         if (expires != null) put(KEY_GARMIN_EXPIRES, expires.toString())
-        else prefs.edit().remove(KEY_GARMIN_EXPIRES).apply()
+        else prefs.edit { remove(KEY_GARMIN_EXPIRES) }
     }
 
     // -------------------------------------------------------------- crypto
 
     private fun put(key: String, value: String) {
-        prefs.edit().putString(key, encrypt(value)).apply()
+        prefs.edit { putString(key, encrypt(value)) }
     }
 
     private fun get(key: String): String? =

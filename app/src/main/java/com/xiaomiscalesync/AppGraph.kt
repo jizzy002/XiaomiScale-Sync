@@ -10,6 +10,9 @@ import com.xiaomiscalesync.data.ArchiveDb
 import com.xiaomiscalesync.data.Category
 import com.xiaomiscalesync.data.Secrets
 import com.xiaomiscalesync.data.SettingsStore
+import com.xiaomiscalesync.data.SyncActivityMapper
+import com.xiaomiscalesync.data.SyncActivityStore
+import com.xiaomiscalesync.data.SyncStatusStore
 import com.xiaomiscalesync.data.WeighInRepository
 import com.xiaomiscalesync.garmin.GarminAuthError
 import com.xiaomiscalesync.garmin.GarminClient
@@ -42,7 +45,13 @@ class AppGraph private constructor(private val appContext: Context) {
 
     val secrets = Secrets(appContext)
 
-    val repo = WeighInRepository(ArchiveDb.build(appContext).archiveDao(), settings)
+    private val archiveDb = ArchiveDb.build(appContext)
+
+    val repo = WeighInRepository(archiveDb.archiveDao(), settings)
+
+    val syncActivity = SyncActivityStore(archiveDb.syncActivityDao())
+
+    val syncStatus = SyncStatusStore.of(appContext)
 
     private val http = OkHttpClient()
 
@@ -78,7 +87,7 @@ class AppGraph private constructor(private val appContext: Context) {
         openSession = { scanner.openSession() },
         profile = {
             val latestMine = repo.observe(Category.MINE).first().firstOrNull()
-            settings.current().toProfile(latestMine?.weightGrams)
+            settings.current().toProfile(latestMine?.weightCentiKg)
         },
         log = ::log,
     )
@@ -91,7 +100,9 @@ class AppGraph private constructor(private val appContext: Context) {
      */
     private suspend fun handleBeacon(beacon: Beacon, weighIn: BroadcastWeighIn?) {
         if (!engine.onBeacon(beacon, weighIn)) return
-        val synced = engine.syncNow() != null
+        val result = engine.syncNow()
+        if (result != null) recordSyncResult(result)
+        val synced = result != null
         // Only a broadcast weigh-in or a sync that ran can add rows; the
         // scale re-advertises for a while after each weighing, and queuing
         // a pass per repeat stacked ~8 no-op workers on the device.
@@ -100,12 +111,26 @@ class AppGraph private constructor(private val appContext: Context) {
         }
     }
 
+    /** User-requested foreground recovery; scanner must already be open on Home. */
+    suspend fun recoverStoredReadings(): Boolean {
+        val result = engine.syncNow(force = true) ?: return false
+        recordSyncResult(result)
+        if (repo.pending().isNotEmpty()) PushWorker.enqueue(appContext)
+        return true
+    }
+
     /**
      * The app-open push (plan Task 17): one [PushWorker] pass when anything
      * is pending — e.g. rows left PENDING by a network failure last time.
      */
     suspend fun pushIfPending() {
         enqueueIfPending({ repo.pending().size }) { PushWorker.enqueue(appContext) }
+    }
+
+    private suspend fun recordSyncResult(result: com.xiaomiscalesync.sync.SyncResult) {
+        val now = System.currentTimeMillis() / 1000
+        syncStatus.record(result, now)
+        runCatching { syncActivity.record(SyncActivityMapper.scale(result, now)) }
     }
 
     /** Logcat only; every caller passes masked/sanitized text (no key material). */

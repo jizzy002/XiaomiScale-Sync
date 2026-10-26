@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.map
  *
  * Ordering follows the real DAO's SQL: `rowsWith` is `ORDER BY recordedAt
  * ASC` (stable, so insertion order survives timestamp ties), `observeAll` is
- * `ORDER BY recordedAt DESC`. The unique index on (recordedAt, weightGrams)
+ * `ORDER BY recordedAt DESC`. The unique index on (recordedAt, weightCentiKg)
  * is enforced in [insert] with IGNORE semantics — a conflict returns -1 and
  * stores nothing, never a throw.
  */
@@ -44,14 +44,16 @@ class FakeDao : ArchiveDao {
     }
 
     override suspend fun insert(record: WeighInRecord): Long {
-        // Unique index on (recordedAt, weightGrams) with OnConflictStrategy.IGNORE:
+        // Unique index on (recordedAt, weightCentiKg) with OnConflictStrategy.IGNORE:
         // a conflicting row is silently not inserted and -1 is returned, never a throw.
-        val conflict = rows.value.any { it.recordedAt == record.recordedAt && it.weightGrams == record.weightGrams }
+        val conflict = rows.value.any { it.recordedAt == record.recordedAt && it.weightCentiKg == record.weightCentiKg }
         if (conflict) return -1L
         val id = nextId++
         rows.value = rows.value + record.copy(id = id)
         return id
     }
+
+    override suspend fun insertAll(records: List<WeighInRecord>): List<Long> = records.map { insert(it) }
 
     override suspend fun fillRecordNo(id: Long, recordNo: Long) {
         rows.value = rows.value.map { if (it.id == id && it.recordNo == null) it.copy(recordNo = recordNo) else it }

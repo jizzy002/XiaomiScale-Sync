@@ -36,7 +36,7 @@
          listed out of both rules files below. -->
     <application
         android:label="Xiaomi Scale Sync"
-        android:theme="@style/Theme.XiaomiScaleSync"
+        android:theme="@style/Theme.XiaomiScaleSync.Starting"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:fullBackupContent="@xml/backup_rules"

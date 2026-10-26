@@ -29,13 +29,13 @@ class RepositoryFlowTest {
     ) to dao
 
     private fun ns(
-        weightGrams: Int = 8025,
+        weightCentiKg: Int = 8025,
         recordedAt: Long = 1_790_000_000L,
         source: WeighInSource = WeighInSource.STORED,
         recordNo: Long? = null,
         scaleFlag: Int = 0,
         memberMid: Long = 1L,
-    ) = NewWeighIn(weightGrams, recordedAt, source, recordNo, scaleFlag, memberMid)
+    ) = NewWeighIn(weightCentiKg, recordedAt, source, recordNo, scaleFlag, memberMid)
 
     @Test
     fun mergeInsertsAndDedupesAcrossCalls() = runBlocking {
@@ -64,35 +64,35 @@ class RepositoryFlowTest {
     @Test
     fun pendingExcludesNeedsReviewAndGuest() = runBlocking {
         val (repo, _) = repo()
-        repo.merge(listOf(ns(weightGrams = 8000)))                       // mine → PENDING
-        repo.merge(listOf(ns(weightGrams = 8100, scaleFlag = 2, memberMid = 0)))  // needs review
+        repo.merge(listOf(ns(weightCentiKg = 8000)))                       // mine → PENDING
+        repo.merge(listOf(ns(weightCentiKg = 8100, scaleFlag = 2, memberMid = 0)))  // needs review
         // Approve one as mine (→ pushable), keep another as guest (→ archive only).
         repo.approve(2)
-        repo.merge(listOf(ns(weightGrams = 8200, scaleFlag = 2, memberMid = 0)))
+        repo.merge(listOf(ns(weightCentiKg = 8200, scaleFlag = 2, memberMid = 0)))
         repo.keepGuest(3)
 
         val pending = repo.pending()
-        assertEquals(listOf(8000, 8100), pending.map { it.weightGrams }) // 8200 guest never pushes
+        assertEquals(listOf(8000, 8100), pending.map { it.weightCentiKg }) // 8200 guest never pushes
         assertTrue(pending.all { it.category == Category.MINE })
     }
 
     @Test
     fun approveFlipsCategoryWithoutTouchingGarminStatus() = runBlocking {
         val (repo, dao) = repo()
-        repo.merge(listOf(ns(weightGrams = 7260, scaleFlag = 2, memberMid = 0)))
+        repo.merge(listOf(ns(weightCentiKg = 7260, scaleFlag = 2, memberMid = 0)))
         assertEquals(GarminStatus.PENDING, dao.rows.value.single().garminStatus)
 
         repo.approve(1)
         val row = dao.rows.value.single()
         assertEquals(Category.MINE, row.category)
         assertEquals(GarminStatus.PENDING, row.garminStatus) // approval itself changes no status
-        assertEquals(listOf(7260), repo.pending().map { it.weightGrams })
+        assertEquals(listOf(7260), repo.pending().map { it.weightCentiKg })
     }
 
     @Test
     fun keepGuestFlipsToGuestAndStaysOutOfPending() = runBlocking {
         val (repo, dao) = repo()
-        repo.merge(listOf(ns(weightGrams = 7260, scaleFlag = 2, memberMid = 0)))
+        repo.merge(listOf(ns(weightCentiKg = 7260, scaleFlag = 2, memberMid = 0)))
         repo.keepGuest(1)
         assertEquals(Category.GUEST, dao.rows.value.single().category)
         assertTrue(repo.pending().isEmpty())
@@ -101,18 +101,18 @@ class RepositoryFlowTest {
     @Test
     fun observeFiltersByCategoryAndEmits() = runBlocking {
         val (repo, _) = repo()
-        repo.merge(listOf(ns(weightGrams = 8000)))
-        repo.merge(listOf(ns(weightGrams = 7260, scaleFlag = 2, memberMid = 0)))
+        repo.merge(listOf(ns(weightCentiKg = 8000)))
+        repo.merge(listOf(ns(weightCentiKg = 7260, scaleFlag = 2, memberMid = 0)))
         assertEquals(2, repo.observe(null).first().size)
-        assertEquals(listOf(7260), repo.observe(Category.NEEDS_REVIEW).first().map { it.weightGrams })
-        assertEquals(listOf(8000), repo.observe(Category.MINE).first().map { it.weightGrams })
+        assertEquals(listOf(7260), repo.observe(Category.NEEDS_REVIEW).first().map { it.weightCentiKg })
+        assertEquals(listOf(8000), repo.observe(Category.MINE).first().map { it.weightCentiKg })
         assertTrue(repo.observe(Category.GUEST).first().isEmpty())
     }
 
     @Test
     fun backfillCutoffMakesOldRecordsSkippedExistingAndUnpushable() = runBlocking {
         val (repo, _) = repo(backfillCutoff = 1_790_000_000L)
-        val r = repo.merge(listOf(ns(weightGrams = 8000, recordedAt = 1_789_999_999L)))
+        val r = repo.merge(listOf(ns(weightCentiKg = 8000, recordedAt = 1_789_999_999L)))
         assertEquals(1, r.inserted)
         assertTrue(repo.pending().isEmpty()) // archive-only, never pushed
     }
@@ -120,7 +120,7 @@ class RepositoryFlowTest {
     @Test
     fun setGarminStatusFlipsRows() = runBlocking {
         val (repo, _) = repo()
-        repo.merge(listOf(ns(weightGrams = 8000)))
+        repo.merge(listOf(ns(weightCentiKg = 8000)))
         repo.setGarminStatus(listOf(1), GarminStatus.PUSHED)
         assertTrue(repo.pending().isEmpty())
     }
@@ -128,9 +128,9 @@ class RepositoryFlowTest {
     @Test
     fun deleteAndDeleteAllTouchOnlyTheAppArchive() = runBlocking {
         val (repo, dao) = repo()
-        repo.merge(listOf(ns(weightGrams = 8000), ns(weightGrams = 7260)))
+        repo.merge(listOf(ns(weightCentiKg = 8000), ns(weightCentiKg = 7260)))
         repo.delete(listOf(1))
-        assertEquals(listOf(7260), dao.rows.value.map { it.weightGrams })
+        assertEquals(listOf(7260), dao.rows.value.map { it.weightCentiKg })
         repo.deleteAll()
         assertTrue(dao.rows.value.isEmpty())
     }
@@ -155,7 +155,7 @@ class RepositoryFlowTest {
         // plan as an INSERT: the second writer commits it right after the
         // merger's read snapshot — the two-concurrent-merges interleaving.
         dao.raceRow = WeighInRecord(
-            id = 0, weightGrams = 8025, recordedAt = 1_790_000_000L,
+            id = 0, weightCentiKg = 8025, recordedAt = 1_790_000_000L,
             source = WeighInSource.STORED, recordNo = 41, scaleFlag = 0,
             memberMid = 1, category = Category.MINE, garminStatus = GarminStatus.PENDING,
             pushedAt = null, createdAt = now,
@@ -163,7 +163,7 @@ class RepositoryFlowTest {
         // Must not throw SQLiteConstraintException, must not double-insert.
         val result = repo.merge(listOf(ns()))
         assertEquals(0, result.inserted) // the conflicting insert was ignored, not counted
-        val forKey = dao.rows.value.filter { it.recordedAt == 1_790_000_000L && it.weightGrams == 8025 }
+        val forKey = dao.rows.value.filter { it.recordedAt == 1_790_000_000L && it.weightCentiKg == 8025 }
         assertEquals(1, forKey.size)      // exactly one row survives the race
         assertEquals(41L, forKey.single().recordNo)
     }

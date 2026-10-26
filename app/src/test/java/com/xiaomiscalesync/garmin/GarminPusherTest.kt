@@ -3,6 +3,7 @@ package com.xiaomiscalesync.garmin
 import com.xiaomiscalesync.data.Category
 import com.xiaomiscalesync.data.FakeDao
 import com.xiaomiscalesync.data.GarminStatus
+import com.xiaomiscalesync.data.SyncFailureCategory
 import com.xiaomiscalesync.data.NewWeighIn
 import com.xiaomiscalesync.data.Settings
 import com.xiaomiscalesync.data.SettingsSource
@@ -53,7 +54,7 @@ class GarminPusherTest {
         },
         mfa = { "" }, // interactive sign-in is not under test here
     ) {
-        data class Add(val weightGrams: Int, val localTs: Instant)
+        data class Add(val weightCentiKg: Int, val localTs: Instant)
 
         val fetchedDates = mutableListOf<LocalDate>()
         val added = mutableListOf<Add>()
@@ -73,8 +74,8 @@ class GarminPusherTest {
             return weighInsFor(date)
         }
 
-        override suspend fun addWeighIn(weightGrams: Int, localTs: ZonedDateTime) {
-            added += Add(weightGrams, localTs.toInstant())
+        override suspend fun addWeighIn(weightCentiKg: Int, localTs: ZonedDateTime) {
+            added += Add(weightCentiKg, localTs.toInstant())
             writeError?.let { throw it }
         }
     }
@@ -92,19 +93,19 @@ class GarminPusherTest {
     }
 
     private fun ns(
-        weightGrams: Int = 8025,
+        weightCentiKg: Int = 8025,
         recordedAt: Long = t1,
         scaleFlag: Int = 0,
         memberMid: Long = 1L,
-    ) = NewWeighIn(weightGrams, recordedAt, WeighInSource.STORED, recordNo = null, scaleFlag, memberMid)
+    ) = NewWeighIn(weightCentiKg, recordedAt, WeighInSource.STORED, recordNo = null, scaleFlag, memberMid)
 
     private fun record(
-        weightGrams: Int = 8025,
+        weightCentiKg: Int = 8025,
         recordedAt: Long = t1,
         category: Category = Category.MINE,
         status: GarminStatus = GarminStatus.PENDING,
     ) = WeighInRecord(
-        id = 1, weightGrams = weightGrams, recordedAt = recordedAt,
+        id = 1, weightCentiKg = weightCentiKg, recordedAt = recordedAt,
         source = WeighInSource.STORED, recordNo = null, scaleFlag = 0,
         memberMid = 1, category = category, garminStatus = status,
         pushedAt = null, createdAt = now,
@@ -132,15 +133,15 @@ class GarminPusherTest {
     @Test
     fun happyPushMarksPushedStampsPushedAtAndUploadsInLocalTime() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8025, recordedAt = t1)))
+        repo.merge(listOf(ns(weightCentiKg = 8025, recordedAt = t1)))
         val garmin = FakeGarmin()
 
         val summary = pusher(repo, garmin).pushPending()
 
-        // Correct addWeighIn args: weightGrams passed through, local time of the record.
+        // Correct addWeighIn args: weightCentiKg passed through, local time of the record.
         assertEquals(
             listOf(8025 to Instant.ofEpochSecond(t1)),
-            garmin.added.map { it.weightGrams to it.localTs },
+            garmin.added.map { it.weightCentiKg to it.localTs },
         )
         // The guard queried the record's calendar day before uploading.
         assertEquals(
@@ -156,7 +157,7 @@ class GarminPusherTest {
     @Test
     fun guardSkipsWhenGmtTimestampMatchesTheSameSecond() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8025, recordedAt = t1)))
+        repo.merge(listOf(ns(weightCentiKg = 8025, recordedAt = t1)))
         val garmin = FakeGarmin().apply {
             // Same unix second, wildly different value: the timestamp match wins.
             weighInsFor = { listOf(GarminWeighIn(utcStamp(t1), dayOf(t1), valueKg = 99.99)) }
@@ -172,7 +173,7 @@ class GarminPusherTest {
     @Test
     fun guardSkipsWhenDateAndValueMatchEvenWithADifferentTimestamp() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8025, recordedAt = t1)))
+        repo.merge(listOf(ns(weightCentiKg = 8025, recordedAt = t1)))
         val garmin = FakeGarmin().apply {
             // Different second on the same day, identical kg: the date+value fallback wins.
             weighInsFor = { listOf(GarminWeighIn(utcStamp(t1 + 3_600), dayOf(t1), valueKg = 80.25)) }
@@ -188,7 +189,7 @@ class GarminPusherTest {
     @Test
     fun guardMissPushesTheWeighIn() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8025, recordedAt = t1)))
+        repo.merge(listOf(ns(weightCentiKg = 8025, recordedAt = t1)))
         val garmin = FakeGarmin().apply {
             // Same day, different value, different second → not a duplicate.
             weighInsFor = { listOf(GarminWeighIn(utcStamp(t1 + 3_600), dayOf(t1), valueKg = 70.00)) }
@@ -196,7 +197,7 @@ class GarminPusherTest {
 
         val summary = pusher(repo, garmin).pushPending()
 
-        assertEquals(listOf(8025), garmin.added.map { it.weightGrams })
+        assertEquals(listOf(8025), garmin.added.map { it.weightCentiKg })
         assertEquals(GarminStatus.PUSHED, dao.rows.value.single().garminStatus)
         assertEquals(1, summary.pushed)
     }
@@ -208,18 +209,21 @@ class GarminPusherTest {
         // second with .750 ms is still the same weigh-in.
         val stamp750 = utcStamp(t1).replace(Regex("""\.\d{3}$"""), ".750")
         val hit = GarminWeighIn(stamp750, dayOf(t1), valueKg = 1.0) // value deliberately wrong
-        assertTrue(pusher.shouldSkip(listOf(hit), record(weightGrams = 8025, recordedAt = t1)))
+        assertTrue(pusher.shouldSkip(listOf(hit), record(weightCentiKg = 8025, recordedAt = t1)))
     }
 
     @Test
     fun authErrorOnUploadStopsThePassAndBlocksAuth() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8000, recordedAt = t1), ns(weightGrams = 8100, recordedAt = t2)))
+        repo.merge(listOf(ns(weightCentiKg = 8000, recordedAt = t1), ns(weightCentiKg = 8100, recordedAt = t2)))
         val garmin = FakeGarmin().apply { writeError = GarminAuthError("401 Unauthorized") }
 
         val summary = pusher(repo, garmin).pushPending()
 
-        assertEquals(PushSummary(pushed = 0, skippedExisting = 0, failed = 1, authBlocked = true), summary)
+        assertEquals(
+            PushSummary(pushed = 0, skippedExisting = 0, failed = 1, authBlocked = true, failure = SyncFailureCategory.AUTHENTICATION),
+            summary,
+        )
         assertEquals(GarminStatus.AUTH_REQUIRED, dao.rowAt(t1).garminStatus)
         assertEquals(GarminStatus.PENDING, dao.rowAt(t2).garminStatus) // later rows untouched
         assertEquals(1, garmin.fetchedDates.size) // the second row never reached Garmin
@@ -229,7 +233,7 @@ class GarminPusherTest {
     @Test
     fun authErrorOnTheGuardFetchAlsoBlocksAuth() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8000, recordedAt = t1)))
+        repo.merge(listOf(ns(weightCentiKg = 8000, recordedAt = t1)))
         val garmin = FakeGarmin().apply { readError = GarminAuthError("401 on weight range read") }
 
         val summary = pusher(repo, garmin).pushPending()
@@ -242,12 +246,15 @@ class GarminPusherTest {
     @Test
     fun rateLimitedStopsThePassAndRowsStayPending() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8000, recordedAt = t1), ns(weightGrams = 8100, recordedAt = t2)))
+        repo.merge(listOf(ns(weightCentiKg = 8000, recordedAt = t1), ns(weightCentiKg = 8100, recordedAt = t2)))
         val garmin = FakeGarmin().apply { writeError = GarminRateLimited("429 Too Many Requests") }
 
         val summary = pusher(repo, garmin).pushPending()
 
-        assertEquals(PushSummary(pushed = 0, skippedExisting = 0, failed = 1, authBlocked = false), summary)
+        assertEquals(
+            PushSummary(pushed = 0, skippedExisting = 0, failed = 1, authBlocked = false, failure = SyncFailureCategory.RATE_LIMITED),
+            summary,
+        )
         assertEquals(GarminStatus.PENDING, dao.rowAt(t1).garminStatus) // no state flip
         assertEquals(GarminStatus.PENDING, dao.rowAt(t2).garminStatus)
         assertEquals(1, garmin.fetchedDates.size) // pass stopped, later rows untouched
@@ -256,26 +263,32 @@ class GarminPusherTest {
     @Test
     fun apiErrorStopsThePassAndRowsStayPending() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8000, recordedAt = t1)))
+        repo.merge(listOf(ns(weightCentiKg = 8000, recordedAt = t1)))
         val garmin = FakeGarmin().apply { writeError = GarminApiError(500, "/weight-service/user-weight") }
 
         val summary = pusher(repo, garmin).pushPending()
 
-        assertEquals(PushSummary(pushed = 0, skippedExisting = 0, failed = 1, authBlocked = false), summary)
+        assertEquals(
+            PushSummary(pushed = 0, skippedExisting = 0, failed = 1, authBlocked = false, failure = SyncFailureCategory.SERVICE),
+            summary,
+        )
         assertEquals(GarminStatus.PENDING, dao.rows.value.single().garminStatus)
     }
 
     @Test
     fun networkErrorStopsThePassAndRowsStayPending() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8000, recordedAt = t1)))
+        repo.merge(listOf(ns(weightCentiKg = 8000, recordedAt = t1)))
         val garmin = FakeGarmin().apply {
             writeError = GarminNetworkError("/weight-service/user-weight", IOException("dns"))
         }
 
         val summary = pusher(repo, garmin).pushPending()
 
-        assertEquals(PushSummary(pushed = 0, skippedExisting = 0, failed = 1, authBlocked = false), summary)
+        assertEquals(
+            PushSummary(pushed = 0, skippedExisting = 0, failed = 1, authBlocked = false, failure = SyncFailureCategory.NETWORK),
+            summary,
+        )
         assertEquals(GarminStatus.PENDING, dao.rows.value.single().garminStatus)
     }
 
@@ -295,14 +308,14 @@ class GarminPusherTest {
     fun multipleRowsArePushedInRecordedOrder() = runBlocking {
         val (repo, dao) = harness()
         // Inserted out of chronological order: the queue still drains oldest first.
-        repo.merge(listOf(ns(weightGrams = 8300, recordedAt = t3), ns(weightGrams = 8100, recordedAt = t2), ns(weightGrams = 8200, recordedAt = t1)))
+        repo.merge(listOf(ns(weightCentiKg = 8300, recordedAt = t3), ns(weightCentiKg = 8100, recordedAt = t2), ns(weightCentiKg = 8200, recordedAt = t1)))
         val garmin = FakeGarmin()
 
         val summary = pusher(repo, garmin).pushPending()
 
         assertEquals(
             listOf(8200 to t1, 8100 to t2, 8300 to t3),
-            garmin.added.map { it.weightGrams to it.localTs.epochSecond },
+            garmin.added.map { it.weightCentiKg to it.localTs.epochSecond },
         )
         assertEquals(3, summary.pushed)
         assertTrue(dao.rows.value.all { it.garminStatus == GarminStatus.PUSHED && it.pushedAt == now })
@@ -311,16 +324,16 @@ class GarminPusherTest {
     @Test
     fun needsReviewAndGuestRowsAreNeverAttempted() = runBlocking {
         val (repo, dao) = harness()
-        repo.merge(listOf(ns(weightGrams = 8000, recordedAt = t1)))                            // mine
-        repo.merge(listOf(ns(weightGrams = 8100, recordedAt = t2, scaleFlag = 2, memberMid = 0))) // needs review
-        repo.merge(listOf(ns(weightGrams = 8200, recordedAt = t3, scaleFlag = 2, memberMid = 0)))
+        repo.merge(listOf(ns(weightCentiKg = 8000, recordedAt = t1)))                            // mine
+        repo.merge(listOf(ns(weightCentiKg = 8100, recordedAt = t2, scaleFlag = 2, memberMid = 0))) // needs review
+        repo.merge(listOf(ns(weightCentiKg = 8200, recordedAt = t3, scaleFlag = 2, memberMid = 0)))
         repo.keepGuest(3) // → guest, archive only
         val garmin = FakeGarmin()
 
         val summary = pusher(repo, garmin).pushPending()
 
         assertEquals(PushSummary(pushed = 1, skippedExisting = 0, failed = 0, authBlocked = false), summary)
-        assertEquals(listOf(8000), garmin.added.map { it.weightGrams }) // only the MINE row
+        assertEquals(listOf(8000), garmin.added.map { it.weightCentiKg }) // only the MINE row
         assertEquals(GarminStatus.PENDING, dao.rowAt(t2).garminStatus)  // untouched
         assertEquals(GarminStatus.PENDING, dao.rowAt(t3).garminStatus)
     }

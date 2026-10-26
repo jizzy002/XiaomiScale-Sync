@@ -26,6 +26,13 @@ jobs:
       - name: Unit tests + debug build
         run: ./gradlew testDebugUnitTest assembleDebug
 
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: xiaomi-scale-sync-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
       - name: Upload test reports on failure
         if: failure()
         uses: actions/upload-artifact@v7

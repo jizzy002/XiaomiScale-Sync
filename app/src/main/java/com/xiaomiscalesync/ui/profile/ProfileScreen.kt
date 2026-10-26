@@ -6,15 +6,20 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.os.PersistableBundle
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.Modifier
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -31,6 +36,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -43,8 +49,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -52,8 +60,11 @@ import androidx.compose.ui.unit.dp
 import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.data.Settings
 import com.xiaomiscalesync.data.ThemeMode
+import com.xiaomiscalesync.data.WeightUnit
 import com.xiaomiscalesync.garmin.GarminAuthError
 import com.xiaomiscalesync.ui.CodePrompt
+import com.xiaomiscalesync.ui.SignInDisclosure
+import com.xiaomiscalesync.ui.SignInProvider
 import com.xiaomiscalesync.ui.onboarding.CaptchaDialog
 import com.xiaomiscalesync.ui.onboarding.CodeDialog
 import com.xiaomiscalesync.ui.onboarding.GarminSso
@@ -110,8 +121,8 @@ fun ProfileScreen(onOpenDebug: (() -> Unit)?) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            state.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+            state.error?.let { FeedbackBanner(it, isError = true) }
+            state.message?.let { FeedbackBanner(it, isError = false) }
 
             // ------------------------------------------------ scale keys
             Section("Scale keys") {
@@ -162,24 +173,22 @@ fun ProfileScreen(onOpenDebug: (() -> Unit)?) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = state.heightCm,
-                        onValueChange = viewModel::setHeightCm,
-                        label = { Text("Height (cm)") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = state.age,
-                        onValueChange = viewModel::setAge,
-                        label = { Text("Age") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                OutlinedTextField(
+                    value = state.heightCm,
+                    onValueChange = viewModel::setHeightCm,
+                    label = { Text("Height (cm)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = state.age,
+                    onValueChange = viewModel::setAge,
+                    label = { Text("Age") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = state.sex == 1, onClick = { viewModel.setSex(1) }, label = { Text("Male") })
                     FilterChip(selected = state.sex == 2, onClick = { viewModel.setSex(2) }, label = { Text("Female") })
@@ -212,6 +221,27 @@ fun ProfileScreen(onOpenDebug: (() -> Unit)?) {
                 FilledTonalButton(onClick = { scope.launch { viewModel.saveProfile() } }) { Text("Save profile") }
             }
 
+            // ------------------------------------------------------- units
+            Section("Units") {
+                val settings by graph.settings.settings.collectAsState(initial = Settings.DEFAULT)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    WeightUnit.entries.forEachIndexed { index, unit ->
+                        SegmentedButton(
+                            selected = settings.weightUnit == unit,
+                            onClick = { scope.launch { graph.settings.setWeightUnit(unit) } },
+                            shape = SegmentedButtonDefaults.itemShape(index, WeightUnit.entries.size),
+                        ) {
+                            Text(unit.label)
+                        }
+                    }
+                }
+                Text(
+                    "Changes weight display only. The scale and Garmin always use kg.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             // ------------------------------------------------ appearance
             Section("Appearance") {
                 val settings by graph.settings.settings.collectAsState(initial = null)
@@ -225,6 +255,11 @@ fun ProfileScreen(onOpenDebug: (() -> Unit)?) {
                         ) { Text(mode.label) }
                     }
                 }
+                Text(
+                    "Android 12+ uses your wallpaper colors. Older versions use the app's default colors.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             // ----------------------------------------------------- other
@@ -247,6 +282,7 @@ fun ProfileScreen(onOpenDebug: (() -> Unit)?) {
             title = "Re-extract scale keys",
             userLabel = "Mi account email / phone",
             initialUser = state.miAccount ?: "",
+            provider = SignInProvider.XIAOMI,
             onDismiss = { miDialog = false },
             onSubmit = { user, pass ->
                 miDialog = false
@@ -266,6 +302,7 @@ fun ProfileScreen(onOpenDebug: (() -> Unit)?) {
             title = "Garmin Connect sign-in",
             userLabel = "Garmin email",
             initialUser = state.garminEmail ?: "",
+            provider = SignInProvider.GARMIN,
             onDismiss = { garminDialog = false },
             onSubmit = { user, pass ->
                 garminDialog = false
@@ -294,6 +331,25 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
+private fun FeedbackBanner(text: String, isError: Boolean) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        color = if (isError) scheme.errorContainer else scheme.secondaryContainer,
+        contentColor = if (isError) scheme.onErrorContainer else scheme.onSecondaryContainer,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
+}
+
+@Composable
 private fun InfoRow(label: String, value: String, mono: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -306,6 +362,7 @@ private fun InfoRow(label: String, value: String, mono: Boolean = false) {
             value,
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = if (mono) FontFamily.Monospace else null,
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -355,6 +412,7 @@ private fun CredentialsDialog(
     title: String,
     userLabel: String,
     initialUser: String,
+    provider: SignInProvider,
     onDismiss: () -> Unit,
     onSubmit: (String, String) -> Unit,
 ) {
@@ -364,7 +422,10 @@ private fun CredentialsDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 OutlinedTextField(user, { user = it }, label = { Text(userLabel) }, singleLine = true)
                 OutlinedTextField(
                     pass,
@@ -374,6 +435,7 @@ private fun CredentialsDialog(
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 )
+                SignInDisclosure(provider)
             }
         },
         confirmButton = {

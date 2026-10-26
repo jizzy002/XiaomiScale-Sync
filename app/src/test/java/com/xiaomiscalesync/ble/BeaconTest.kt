@@ -177,15 +177,15 @@ class BeaconTest {
 
     @Test
     fun weighInParseAcceptsBoundaryWeights() {
-        assertEquals(100, WeighInObjects.parse(withWeight(100))!!.weightGrams)
-        assertEquals(30000, WeighInObjects.parse(withWeight(30000))!!.weightGrams)
+        assertEquals(100, WeighInObjects.parse(withWeight(100))!!.weightCentiKg)
+        assertEquals(30000, WeighInObjects.parse(withWeight(30000))!!.weightCentiKg)
     }
 
     @Test
     fun weighInParsePassesThroughProfileAndTimestamp() {
         val weighIn = WeighInObjects.parse(withWeight(8025, profileId = 2, ts = 0xFFFFFFFFL))!!
         assertEquals(2, weighIn.profileId)
-        assertEquals(8025, weighIn.weightGrams)
+        assertEquals(8025, weighIn.weightCentiKg)
         assertEquals(0xFFFFFFFFL, weighIn.unixTs) // u32 read as unsigned
     }
 
@@ -200,8 +200,8 @@ class BeaconTest {
     }
 
     /** Builds a 9-byte weigh-in object value: profile, weight (1/100 kg), ts. */
-    private fun withWeight(weight100: Int, profileId: Int = 1, ts: Long = 0x6ab13b80): ByteArray {
+    private fun withWeight(weightCentiKg: Int, profileId: Int = 1, ts: Long = 0x6ab13b80): ByteArray {
         fun le32(v: Long) = ByteArray(4) { i -> ((v shr (8 * i)) and 0xFF).toByte() }
-        return byteArrayOf(profileId.toByte()) + le32(weight100.toLong()) + le32(ts)
+        return byteArrayOf(profileId.toByte()) + le32(weightCentiKg.toLong()) + le32(ts)
     }
 }

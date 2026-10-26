@@ -8,7 +8,7 @@ import com.xiaomiscalesync.data.Settings
  * recognition ("wt" is the reference weight the flag/mid attribution is
  * judged against).
  *
- * Only `mid` and `weightGrams` affect the archive; the rest is display
+ * Only `mid` and `weightCentiKg` affect the archive; the rest is display
  * metadata on the scale. Onboarding (Task 14) and Settings (Task 17)
  * construct this from user input.
  */
@@ -22,7 +22,7 @@ data class Profile(
      * Latest known weight in 1/100 kg (8025 = 80.25 kg) — the fallback
      * when the archive is empty ("or 8000" per the profile-template rule).
      */
-    val weightGrams: Int = 8000,
+    val weightCentiKg: Int = 8000,
 )
 
 /**
@@ -43,24 +43,24 @@ object ProfileJson {
         age: Int,
         sex: Int,
         heightCm: Int,
-        weightGrams: Int,
+        weightCentiKg: Int,
         nowUnix: Long,
     ): String =
-        """{"mid":"$mid","duid":1,"uc":1,"ow":1,"unit":1,"time":$nowUnix,"ud":[{"duid":1,"ut":1,"age":$age,"sex":$sex,"hi":$heightCm,"wt":$weightGrams}]}"""
+        """{"mid":"$mid","duid":1,"uc":1,"ow":1,"unit":1,"time":$nowUnix,"ud":[{"duid":1,"ut":1,"age":$age,"sex":$sex,"hi":$heightCm,"wt":$weightCentiKg}]}"""
 }
 
 /**
  * The profile the engine pushes, from persisted [Settings] plus the latest
  * archived weight. Unanswered fields (a pre-Task-14 install) keep the
- * [Profile] defaults; [weightGrams] null → the 8000 fallback.
+ * [Profile] defaults; [weightCentiKg] null → the 8000 fallback.
  */
-fun Settings.toProfile(weightGrams: Int?): Profile {
+fun Settings.toProfile(weightCentiKg: Int?): Profile {
     val defaults = Profile()
     return Profile(
         mid = mid,
         age = age ?: defaults.age,
         sex = sex,
         heightCm = heightCm ?: defaults.heightCm,
-        weightGrams = weightGrams ?: defaults.weightGrams,
+        weightCentiKg = weightCentiKg ?: defaults.weightCentiKg,
     )
 }

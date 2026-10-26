@@ -26,6 +26,13 @@ and without any server in between.
 - Keeps a local history with a daily chart, and lets you review weigh-ins the
   scale could not attribute ("Needs review": approve as yours or keep as a
   guest's — guests are never sent to Garmin).
+- Shows the last successful scale check and offers an on-demand recovery sync
+  for weigh-ins still stored on the scale. Listening remains foreground-only.
+- Keeps the latest 100 sync outcomes for scale checks and Garmin uploads on the phone,
+  with safe failure categories and counts for troubleshooting.
+- Exports and restores a versioned archive backup from History. Backups include
+  weigh-ins and their review/Garmin states, never account credentials; restore
+  merges records and keeps anything already on the phone.
 - No background service: it only listens while Home is on screen, and there
   is an on/off switch on Home to stop listening entirely.
 
@@ -71,7 +78,7 @@ The wizard walks you through five steps:
 
 Everything can be changed later on the **Profile** tab: re-extract keys,
 sign in to Garmin again, edit your profile, or switch between light and dark
-appearance.
+appearance. Android 12 and newer follow the device's wallpaper colors.
 
 ## Coming from a previous setup
 
@@ -132,8 +139,14 @@ Requires JDK 17.
 
 ```sh
 ./gradlew testDebugUnitTest assembleDebug     # tests + debug APK
-./gradlew installDebug                        # install on a connected phone
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell monkey -p com.xiaomiscalesync.debug 1
 ```
+
+Debug builds use the separate package `com.xiaomiscalesync.debug`, so they
+can be installed alongside the release app (`com.xiaomiscalesync`). Repeating
+the `adb install -r` command updates the debug build while preserving its data.
+The two app packages keep their data and settings separate.
 
 The README screenshots are framed with `scripts/frame_screenshots.py`
 (needs Pillow): save `<screen>-<theme>.png` captures (screen: `home`,

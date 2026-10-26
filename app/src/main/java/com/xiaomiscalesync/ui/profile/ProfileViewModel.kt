@@ -38,7 +38,7 @@ data class ProfileState(
     /** Some row is blocked on an expired sign-in (the Home banner's target). */
     val authExpired: Boolean = false,
 
-    // Profile drafts (kg is fixed in v1).
+    // Scale profile drafts; weight is supplied by the scale in its native kg unit.
     val heightCm: String = "",
     val age: String = "",
     val sex: Int = 1,

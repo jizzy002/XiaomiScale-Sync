@@ -6,4 +6,11 @@
     <style name="Theme.XiaomiScaleSync" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@android:color/transparent</item>
     </style>
+
+    <style name="Theme.XiaomiScaleSync.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_gauge</item>
+        <item name="windowSplashScreenAnimationDuration">760</item>
+        <item name="postSplashScreenTheme">@style/Theme.XiaomiScaleSync</item>
+    </style>
 </resources>
