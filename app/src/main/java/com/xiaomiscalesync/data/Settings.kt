@@ -31,6 +31,8 @@ data class Settings(
     val garminEmail: String? = null,
     /** App appearance; SYSTEM follows the phone's dark-mode setting. */
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** Unit used only when displaying archived and live weights in the app. */
+    val weightUnit: WeightUnit = WeightUnit.KG,
 ) {
     companion object {
         const val DEFAULT_MID = "1"
@@ -39,7 +41,23 @@ data class Settings(
 }
 
 /** App appearance choice (Profile tab). */
-enum class ThemeMode(val label: String) { SYSTEM("System"), LIGHT("Light"), DARK("Dark") }
+enum class ThemeMode(val label: String) {
+    SYSTEM("System"), LIGHT("Light"), DARK("Dark");
+
+    companion object {
+        fun fromStoredName(name: String?): ThemeMode = entries.firstOrNull { it.name == name } ?: SYSTEM
+    }
+}
+
+/** Display preference for weights; scale and Garmin payloads remain kilograms. */
+enum class WeightUnit(val label: String, val symbol: String) {
+    KG("kg", "kg"),
+    LB("lb", "lb");
+
+    companion object {
+        fun fromStoredName(name: String?): WeightUnit = entries.firstOrNull { it.name == name } ?: KG
+    }
+}
 
 /** Read seam so the repository stays JVM-testable without DataStore. */
 fun interface SettingsSource {
@@ -115,6 +133,11 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         dataStore.edit { it[KEY_THEME] = v.name }
     }
 
+    /** A display-only preference; it never changes stored weights or sync payloads. */
+    suspend fun setWeightUnit(v: WeightUnit) {
+        dataStore.edit { it[KEY_WEIGHT_UNIT] = v.name }
+    }
+
     private fun Preferences.toSettings(): Settings = Settings(
         onboarded = this[KEY_ONBOARDED] ?: false,
         backfillCutoff = this[KEY_CUTOFF],
@@ -124,7 +147,8 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         sex = this[KEY_SEX] ?: 1,
         miAccount = this[KEY_MI_ACCOUNT],
         garminEmail = this[KEY_GARMIN_EMAIL],
-        themeMode = ThemeMode.entries.firstOrNull { it.name == this[KEY_THEME] } ?: ThemeMode.SYSTEM,
+        themeMode = ThemeMode.fromStoredName(this[KEY_THEME]),
+        weightUnit = WeightUnit.fromStoredName(this[KEY_WEIGHT_UNIT]),
     )
 
     companion object {
@@ -137,7 +161,7 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         private val KEY_MI_ACCOUNT = stringPreferencesKey("mi_account")
         private val KEY_GARMIN_EMAIL = stringPreferencesKey("garmin_email")
         private val KEY_THEME = stringPreferencesKey("theme_mode")
-
+        private val KEY_WEIGHT_UNIT = stringPreferencesKey("weight_unit")
         fun of(context: Context): SettingsStore = SettingsStore(context.settingsDataStore)
     }
 }

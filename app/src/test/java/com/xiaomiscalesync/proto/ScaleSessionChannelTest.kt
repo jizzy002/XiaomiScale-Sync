@@ -213,14 +213,14 @@ class ScaleSessionChannelTest {
             assertEquals(41L, r1.no)
             assertEquals(1L, r1.mid)
             assertEquals(1, r1.userType)
-            assertEquals(8025, r1.weightGrams)
+            assertEquals(8025, r1.weightCentiKg)
             assertEquals(0, r1.flag)
             assertEquals(1790000000L, r1.ts)
             val r2 = records[1]
             assertEquals(42L, r2.no)
             assertEquals(0L, r2.mid)
             assertEquals(0, r2.userType)
-            assertEquals(7260, r2.weightGrams)
+            assertEquals(7260, r2.weightCentiKg)
             assertEquals(2, r2.flag)
             assertEquals(1790000060L, r2.ts)
 

@@ -31,12 +31,12 @@ data class Beacon(
 /**
  * A weigh-in read from broadcast object `0x4e16`.
  *
- * The scale reports weight in 1/100 kg; [weightGrams] carries that raw value
+ * The scale reports weight in 1/100 kg; [weightCentiKg] carries that raw value
  * unchanged (e.g. 7215 = 72.15 kg) — multiply by 10 for real grams.
  */
 data class BroadcastWeighIn(
     val profileId: Int,
-    val weightGrams: Int,
+    val weightCentiKg: Int,
     val unixTs: Long,
 )
 
@@ -199,17 +199,17 @@ object WeighInObjects {
     private const val VALUE_BYTES = 9
 
     /** Sanity bounds on the weight field (1/100 kg): 1 kg .. 300 kg. */
-    private const val MIN_WEIGHT100 = 100
-    private const val MAX_WEIGHT100 = 30000
+    private const val MIN_WEIGHT_CENTIKG = 100
+    private const val MAX_WEIGHT_CENTIKG = 30000
 
     /** Returns null unless the value is exactly 9 bytes with a plausible weight. */
     fun parse(value: ByteArray): BroadcastWeighIn? {
         if (value.size != VALUE_BYTES) return null
-        val weight100 = u32le(value, 1)
-        if (weight100 < MIN_WEIGHT100 || weight100 > MAX_WEIGHT100) return null
+        val weightCentiKg = u32le(value, 1)
+        if (weightCentiKg < MIN_WEIGHT_CENTIKG || weightCentiKg > MAX_WEIGHT_CENTIKG) return null
         return BroadcastWeighIn(
             profileId = value[0].toInt() and 0xFF,
-            weightGrams = weight100.toInt(),
+            weightCentiKg = weightCentiKg.toInt(),
             unixTs = u32le(value, 5),
         )
     }

@@ -17,7 +17,7 @@
     ],
     "weighIn": {
       "profileId": 1,
-      "weightGrams": 7215,
+      "weightCentiKg": 7215,
       "unixTs": 1790000000
     }
   },

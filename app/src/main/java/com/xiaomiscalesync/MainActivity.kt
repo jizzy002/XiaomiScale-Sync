@@ -6,16 +6,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import com.xiaomiscalesync.data.SettingsStore
-import com.xiaomiscalesync.data.ThemeMode
+import com.xiaomiscalesync.data.Settings
 import com.xiaomiscalesync.ui.AppNavigation
 import com.xiaomiscalesync.ui.theme.AppTheme
 import com.xiaomiscalesync.ui.theme.isDark
-import kotlinx.coroutines.flow.map
 
 /**
  * The single activity: hosts the Compose UI edge-to-edge (each screen's
@@ -24,11 +23,13 @@ import kotlinx.coroutines.flow.map
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        val themeMode = SettingsStore.of(applicationContext).settings.map { it.themeMode }
+        val settings = SettingsStore.of(applicationContext).settings
         setContent {
-            val mode by remember { themeMode }.collectAsState(initial = ThemeMode.SYSTEM)
+            val appSettings by settings.collectAsState(initial = Settings.DEFAULT)
+            val mode = appSettings.themeMode
             val dark = mode.isDark()
             // Status/navigation bar icons follow the app's theme, not the phone's.
             LaunchedEffect(dark) {

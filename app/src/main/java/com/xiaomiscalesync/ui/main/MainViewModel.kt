@@ -50,7 +50,7 @@ sealed class GarminLine {
     object Synced : GarminLine()
 
     /** [count] waiting; [retrying] = the last pass failed and a backoff retry is scheduled. */
-    data class Waiting(val count: Int, val retrying: Boolean) : GarminLine()
+    data class Waiting(val count: Int, val retrying: Boolean, val authBlocked: Int = 0) : GarminLine()
 
     /** A pass is uploading right now ([count] were waiting when it started). */
     data class Pushing(val count: Int) : GarminLine()
@@ -59,7 +59,7 @@ sealed class GarminLine {
 /** The confirmation card for the newest capture. */
 data class LatestCard(
     val id: Long,
-    val weightGrams: Int,
+    val weightCentiKg: Int,
     val recordedAt: Long,
     val source: WeighInSource,
     val chip: StatusChip,
@@ -67,7 +67,7 @@ data class LatestCard(
      * Change vs the owner's previous weigh-in (1/100 kg); null when this row
      * is not the owner's or there is nothing earlier to compare with.
      */
-    val deltaGrams: Int? = null,
+    val deltaCentiKg: Int? = null,
 )
 
 data class MainUiState(
@@ -75,7 +75,7 @@ data class MainUiState(
     val latest: LatestCard? = null,
     val live: LiveReading? = null,
     val banners: List<Banner> = emptyList(),
-    /** The few captures before [latest], newest first (Home's short history). */
+    /** Home's short history, newest first (includes [latest]). */
     val recent: List<LatestCard> = emptyList(),
     /** Null until the owner has any weigh-in of their own. */
     val garmin: GarminLine? = null,
@@ -140,7 +140,7 @@ object MainUi {
             latest = newest?.let { card(it, sorted) },
             live = engine.live,
             banners = banners,
-            recent = sorted.drop(1).take(RECENT_COUNT).map { card(it, sorted) },
+            recent = sorted.take(RECENT_COUNT).map { card(it, sorted) },
             garmin = garminLine(records, push),
         )
     }
@@ -150,15 +150,20 @@ object MainUi {
         val mine = records.filter { it.category == Category.MINE }
         if (mine.isEmpty()) return null
         val waiting = mine.count { it.garminStatus == GarminStatus.PENDING }
+        val authBlocked = mine.count { it.garminStatus == GarminStatus.AUTH_REQUIRED }
         return when {
-            waiting == 0 -> GarminLine.Synced // incl. an app-open pass with nothing to send
-            push == PushState.RUNNING -> GarminLine.Pushing(waiting)
-            else -> GarminLine.Waiting(waiting, retrying = push == PushState.RETRY_SCHEDULED)
+            push == PushState.RUNNING && waiting > 0 -> GarminLine.Pushing(waiting)
+            waiting > 0 || authBlocked > 0 -> GarminLine.Waiting(
+                waiting,
+                retrying = push == PushState.RETRY_SCHEDULED,
+                authBlocked = authBlocked,
+            )
+            else -> GarminLine.Synced // incl. an app-open pass with nothing to send
         }
     }
 
-    /** How many earlier captures Home lists under the latest one. */
-    const val RECENT_COUNT = 4
+    /** How many captures Home lists in its Recent section, including the latest. */
+    const val RECENT_COUNT = 5
 
     /** [row] as a card; [sortedDesc] (newest first) supplies the delta's baseline. */
     private fun card(row: WeighInRecord, sortedDesc: List<WeighInRecord>): LatestCard {
@@ -169,11 +174,11 @@ object MainUi {
         }
         return LatestCard(
             id = row.id,
-            weightGrams = row.weightGrams,
+            weightCentiKg = row.weightCentiKg,
             recordedAt = row.recordedAt,
             source = row.source,
             chip = statusChip(row.category, row.garminStatus),
-            deltaGrams = previousMine?.let { row.weightGrams - it.weightGrams },
+            deltaCentiKg = previousMine?.let { row.weightCentiKg - it.weightCentiKg },
         )
     }
 }

@@ -49,6 +49,23 @@ class PushWorkerTest {
     }
 
     @Test
+    fun nonEmptyPushPassIsRecordedButNoOpPassIsNot() = runBlocking {
+        val recorded = mutableListOf<PushSummary?>()
+        runGarminPush(
+            push = { summary(pushed = 2) },
+            record = { value, _ -> recorded += value },
+            log = { unreachable() },
+        )
+        runGarminPush(
+            push = { summary() },
+            record = { value, _ -> recorded += value },
+            log = { unreachable() },
+        )
+
+        assertEquals(listOf(summary(pushed = 2)), recorded)
+    }
+
+    @Test
     fun retryableFailuresRequestBackoffRetryWithoutLogging() = runBlocking {
         // Rate limit / API / network: typed, handled by the pusher — not an incident.
         val logs = mutableListOf<Throwable>()
@@ -72,9 +89,18 @@ class PushWorkerTest {
         // guard makes the re-run safe by construction.
         val boom = IllegalStateException("unexpected pusher bug")
         val logs = mutableListOf<Throwable>()
-        val result = runGarminPush({ throw boom }) { logs += it }
+        val recorded = mutableListOf<Throwable?>()
+        val result = runGarminPush(
+            push = { throw boom },
+            record = { summary, failure ->
+                assertEquals(null, summary)
+                recorded += failure
+            },
+            log = { logs += it },
+        )
         assertTrue(result is ListenableWorker.Result.Retry)
         assertEquals(listOf<Throwable>(boom), logs)
+        assertEquals(listOf<Throwable?>(boom), recorded)
     }
 
     @Test

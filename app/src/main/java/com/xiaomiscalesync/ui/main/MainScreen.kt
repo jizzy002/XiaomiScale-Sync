@@ -39,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,14 +48,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.xiaomiscalesync.AppGraph
+import com.xiaomiscalesync.data.Settings
 import com.xiaomiscalesync.data.WeighInSource
+import com.xiaomiscalesync.data.WeightUnit
+import com.xiaomiscalesync.data.SyncOutcome
+import com.xiaomiscalesync.data.SyncStatus
 import com.xiaomiscalesync.sync.LiveReading
 import com.xiaomiscalesync.ui.theme.Pill
+import com.xiaomiscalesync.ui.formatCentiKg
+import com.xiaomiscalesync.ui.formatDeltaCentiKg
 import com.xiaomiscalesync.ui.theme.Tone
 import com.xiaomiscalesync.ui.theme.container
 import com.xiaomiscalesync.ui.theme.content
@@ -64,13 +73,13 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Locale
+import kotlinx.coroutines.launch
 
 /**
  * The main weighing screen (plan Task 15, spec "Main screen"): scans only
  * while this screen is resumed (no background scanning), keeps the display
  * on while listening, and shows the listening status, the live reading
- * while connected, the newest capture with its status pill, and the
+ * while connected, the newest capture, and the
  * silence / Garmin-auth / needs-review banners. All decisions live in the
  * JVM-tested [MainUi]; this composable only renders them.
  */
@@ -93,7 +102,27 @@ fun MainScreen(
         )
     }
     val ui by viewModel.uiState.collectAsState(initial = MainUiState())
+    val settings by graph.settings.settings.collectAsState(initial = Settings.DEFAULT)
+    val weightUnit = settings.weightUnit
     val listening by scanner.listening.collectAsState()
+    val syncStatus by graph.syncStatus.status.collectAsState(initial = SyncStatus())
+    val scope = rememberCoroutineScope()
+    var recoveryRunning by remember { mutableStateOf(false) }
+    var recoveryNotice by remember { mutableStateOf<String?>(null) }
+    val recoveryEnabled = listeningOn && listening && !recoveryRunning
+    val onRecover: () -> Unit = {
+        recoveryRunning = true
+        recoveryNotice = null
+        scope.launch {
+            try {
+                if (!graph.recoverStoredReadings()) recoveryNotice = "A scale check is already running."
+            } catch (_: Exception) {
+                recoveryNotice = "The scale check could not be completed. Try again."
+            } finally {
+                recoveryRunning = false
+            }
+        }
+    }
 
     // Permissions: asked once on entry; a grant bumps [permissionTick] so
     // the resume effect below re-runs and starts the scan immediately.
@@ -132,7 +161,16 @@ fun MainScreen(
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Scale Sync") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Scale Sync") },
+                actions = {
+                    TextButton(onClick = onRecover, enabled = recoveryEnabled) {
+                        Text(if (recoveryRunning) "Checking…" else "Check scale")
+                    }
+                },
+            )
+        },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -151,12 +189,26 @@ fun MainScreen(
             }
             for (banner in ui.banners) BannerFor(banner, onReview = onOpenHistory, onSignIn = onOpenProfile)
 
-            StatusCard(ui.headline, listeningOn, listening, onListeningChange)
-            ui.garmin?.let { GarminCard(it, onPushNow = { PushWorker.pushNow(appContext) }) }
-            ui.live?.let { LiveCard(it) }
+            StatusCard(
+                headline = ui.headline,
+                switchOn = listeningOn,
+                scanning = listening,
+                onSwitch = onListeningChange,
+                syncStatus = syncStatus,
+                recoveryNotice = recoveryNotice,
+                recoveryRunning = recoveryRunning,
+            )
             val latest = ui.latest
-            if (latest != null) LatestWeighInCard(latest) else EmptyCard()
-            if (ui.recent.isNotEmpty()) RecentSection(ui.recent, onSeeAll = onOpenHistory)
+            if (latest != null) LatestWeighInCard(latest, weightUnit) else EmptyCard()
+            ui.garmin?.takeUnless { it == GarminLine.Synced }?.let {
+                GarminCard(
+                    it,
+                    onPushNow = { PushWorker.pushNow(appContext) },
+                    onSignIn = onOpenProfile,
+                )
+            }
+            ui.live?.let { LiveCard(it, weightUnit) }
+            if (ui.recent.isNotEmpty()) RecentSection(ui.recent, weightUnit, onSeeAll = onOpenHistory)
         }
     }
 }
@@ -172,17 +224,13 @@ private fun StatusCard(
     switchOn: Boolean,
     scanning: Boolean,
     onSwitch: (Boolean) -> Unit,
+    syncStatus: SyncStatus,
+    recoveryNotice: String?,
+    recoveryRunning: Boolean,
 ) {
-    val active = scanning && headline != Headline.READY
     Card(
         Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (active) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -205,7 +253,13 @@ private fun StatusCard(
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f),
                 )
-                Switch(checked = switchOn, onCheckedChange = onSwitch)
+                Switch(
+                    checked = switchOn,
+                    onCheckedChange = onSwitch,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Listen for scale readings"
+                    },
+                )
             }
             Text(
                 when {
@@ -221,19 +275,38 @@ private fun StatusCard(
             if (headline == Headline.SYNCING) {
                 LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
             }
+            val recoveryDetail = when {
+                recoveryRunning -> "Checking the scale for stored readings…"
+                syncStatus.lastAttemptAt == null -> "No check yet · readings stay on the scale until collected"
+                syncStatus.outcome == SyncOutcome.SUCCESS -> "Last checked ${time(syncStatus.lastSuccessAt ?: syncStatus.lastAttemptAt)} · " +
+                    "${syncStatus.lastSuccessArchived} new ${if (syncStatus.lastSuccessArchived == 1) "reading" else "readings"}"
+                syncStatus.outcome == SyncOutcome.SCALE_NOT_FOUND -> "Scale not found on last check · " +
+                    (syncStatus.lastSuccessAt?.let { "last success ${time(it)}" } ?: "step on the scale and try again")
+                else -> "Last check did not finish · " +
+                    (syncStatus.lastSuccessAt?.let { "last success ${time(it)}" } ?: "keep the scale nearby and try again")
+            }
+            Column(
+                Modifier.padding(top = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(recoveryDetail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                recoveryNotice?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun LiveCard(live: LiveReading) {
+private fun LiveCard(live: LiveReading, weightUnit: WeightUnit) {
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(
             Modifier.padding(20.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text("On the scale", style = MaterialTheme.typography.labelLarge)
-            WeightText(live.weightGrams, 56)
+            WeightText(live.weightCentiKg, weightUnit, 56)
             Pill(
                 if (live.stable) "Stable" else "Measuring…",
                 if (live.stable) Tone.PRIMARY else Tone.NEUTRAL,
@@ -243,7 +316,7 @@ private fun LiveCard(live: LiveReading) {
 }
 
 @Composable
-private fun LatestWeighInCard(latest: LatestCard) {
+private fun LatestWeighInCard(latest: LatestCard, weightUnit: WeightUnit) {
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
@@ -251,14 +324,12 @@ private fun LatestWeighInCard(latest: LatestCard) {
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            WeightText(latest.weightGrams, 48, deltaGrams = latest.deltaGrams)
+            WeightText(latest.weightCentiKg, weightUnit, 48, deltaCentiKg = latest.deltaCentiKg)
             Text(
                 "${time(latest.recordedAt)} · ${sourceLabel(latest.source)}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.size(8.dp))
-            Pill(latest.chip.label, latest.chip.tone())
         }
     }
 }
@@ -268,7 +339,7 @@ private fun LatestWeighInCard(latest: LatestCard) {
  * something waits and no pass is uploading (never cancels a running pass).
  */
 @Composable
-private fun GarminCard(line: GarminLine, onPushNow: () -> Unit) {
+private fun GarminCard(line: GarminLine, onPushNow: () -> Unit, onSignIn: () -> Unit) {
     // Same filled surface as the listening card above it: the two read as
     // one status block (scale, then Garmin).
     Card(
@@ -282,7 +353,11 @@ private fun GarminCard(line: GarminLine, onPushNow: () -> Unit) {
                         when (line) {
                             GarminLine.Synced -> "✓ All weigh-ins are in Garmin"
                             is GarminLine.Pushing -> "Sending ${line.count} to Garmin…"
-                            is GarminLine.Waiting -> "${line.count} waiting for Garmin"
+                            is GarminLine.Waiting -> when {
+                                line.authBlocked > 0 && line.count > 0 -> "${line.count} waiting · ${line.authBlocked} need sign-in"
+                                line.authBlocked > 0 -> "${line.authBlocked} need Garmin sign-in"
+                                else -> "${line.count} waiting for Garmin"
+                            }
                         },
                         style = MaterialTheme.typography.titleSmall,
                     )
@@ -293,9 +368,18 @@ private fun GarminCard(line: GarminLine, onPushNow: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (line is GarminLine.Waiting && line.authBlocked > 0) {
+                        Text(
+                            "These readings will resume after you sign in again.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
-                if (line is GarminLine.Waiting) {
+                if (line is GarminLine.Waiting && line.count > 0) {
                     FilledTonalButton(onClick = onPushNow) { Text("Push now") }
+                } else if (line is GarminLine.Waiting && line.authBlocked > 0) {
+                    FilledTonalButton(onClick = onSignIn) { Text("Sign in") }
                 }
             }
             if (line is GarminLine.Pushing) {
@@ -305,9 +389,9 @@ private fun GarminCard(line: GarminLine, onPushNow: () -> Unit) {
     }
 }
 
-/** Home's short history: the few captures before the latest, with "See all". */
+/** Home's short history, newest first including the latest weigh-in. */
 @Composable
-private fun RecentSection(recent: List<LatestCard>, onSeeAll: () -> Unit) {
+private fun RecentSection(recent: List<LatestCard>, weightUnit: WeightUnit, onSeeAll: () -> Unit) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Recent", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
@@ -322,12 +406,13 @@ private fun RecentSection(recent: List<LatestCard>, onSeeAll: () -> Unit) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "${kg(row.weightGrams)} kg",
+                            "${weightUnit.formatCentiKg(row.weightCentiKg)} ${weightUnit.symbol}",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            time(row.recordedAt) + (row.deltaGrams?.let { " · ${delta(it)}" } ?: ""),
+                            time(row.recordedAt) +
+                                (row.deltaCentiKg?.let { " · ${weightUnit.formatDeltaCentiKg(it)}" } ?: ""),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -339,30 +424,26 @@ private fun RecentSection(recent: List<LatestCard>, onSeeAll: () -> Unit) {
     }
 }
 
-/** `-0.80 kg` / `+0.15 kg` / `±0.00 kg` — neutral wording, no judgement. */
-private fun delta(grams100: Int): String {
-    val sign = when {
-        grams100 > 0 -> "+"
-        grams100 < 0 -> "−"
-        else -> "±"
-    }
-    return "$sign${kg(kotlin.math.abs(grams100))} kg"
-}
-
-/** `84.20` large with a smaller `kg` on the same baseline. */
+/** Formats a signed change in the selected unit, without judgement. */
+/** Weight with its selected unit and optional change on the same baseline. */
 @Composable
-private fun WeightText(weight100: Int, sizeSp: Int, deltaGrams: Int? = null) {
+private fun WeightText(
+    weightCentiKg: Int,
+    weightUnit: WeightUnit,
+    sizeSp: Int,
+    deltaCentiKg: Int? = null,
+) {
     Row(verticalAlignment = Alignment.Bottom) {
-        Text(kg(weight100), fontSize = sizeSp.sp, fontWeight = FontWeight.SemiBold)
+        Text(weightUnit.formatCentiKg(weightCentiKg), fontSize = sizeSp.sp, fontWeight = FontWeight.SemiBold)
         Text(
-            " kg",
+            " ${weightUnit.symbol}",
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(bottom = (sizeSp / 6).dp),
         )
         // Change vs the previous weigh-in, on the same baseline: short, never wraps.
-        deltaGrams?.let {
+        deltaCentiKg?.let {
             Text(
-                "  ${delta(it)}",
+                "  ${weightUnit.formatDeltaCentiKg(it)}",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -394,7 +475,7 @@ private fun BannerFor(banner: Banner, onReview: () -> Unit, onSignIn: () -> Unit
         tone = Tone.WARNING,
     )
     Banner.AuthRequired -> BannerCard(
-        "Garmin sign-in expired.",
+        "Garmin sign-in expired. Queued weigh-ins will resume after you sign in again.",
         tone = Tone.ERROR,
         action = "Sign in" to onSignIn,
     )
@@ -429,9 +510,6 @@ private fun sourceLabel(source: WeighInSource): String = when (source) {
     WeighInSource.LIVE -> "measured live"
     WeighInSource.STORED -> "from scale memory"
 }
-
-/** 1/100 kg → `80.25`. */
-private fun kg(weight100: Int): String = String.format(Locale.US, "%.2f", weight100 / 100.0)
 
 private val CLOCK_FMT = DateTimeFormatter.ofPattern("HH:mm")
 private val DATE_FMT = DateTimeFormatter.ofPattern("EEE d MMM, HH:mm")

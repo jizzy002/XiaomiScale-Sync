@@ -204,7 +204,7 @@ data class StoredRecord(
     val no: Long,
     val mid: Long,
     val userType: Int,
-    val weightGrams: Int,
+    val weightCentiKg: Int,
     val flag: Int,
     val ts: Long,
 )
@@ -231,7 +231,7 @@ object StoredRecords {
             no = long(f[0], record),
             mid = long(f[1], record),
             userType = int(f[2], record),
-            weightGrams = int(f[3], record),
+            weightCentiKg = int(f[3], record),
             flag = int(f[4], record),
             ts = long(f[5], record),
         )

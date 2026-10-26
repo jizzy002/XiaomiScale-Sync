@@ -49,7 +49,7 @@ class HistoryViewModelTest {
 
     private suspend fun HistoryViewModel.state() = uiState.first()
 
-    private fun List<WeighInRecord>.byWeight(w: Int) = single { it.weightGrams == w }
+    private fun List<WeighInRecord>.byWeight(w: Int) = single { it.weightCentiKg == w }
 
     // ---------------------------------------------------------- review flow
 
@@ -105,7 +105,7 @@ class HistoryViewModelTest {
         assertEquals(setOf(target), vm.state().selected)
         vm.deleteSelected()
 
-        assertEquals(listOf(8025, 7990).sorted(), dao.rows.value.map { it.weightGrams }.sorted())
+        assertEquals(listOf(8025, 7990).sorted(), dao.rows.value.map { it.weightCentiKg }.sorted())
         assertTrue(vm.state().selected.isEmpty())
     }
 
@@ -165,7 +165,7 @@ class HistoryViewModelTest {
         vm.setFilter(HistoryFilter.NEEDS_REVIEW)
         val review = vm.state()
         assertEquals(HistoryFilter.NEEDS_REVIEW, review.filter)
-        assertEquals(listOf(6000), review.rows.map { it.weightGrams })
+        assertEquals(listOf(6000), review.rows.map { it.weightCentiKg })
     }
 
     @Test

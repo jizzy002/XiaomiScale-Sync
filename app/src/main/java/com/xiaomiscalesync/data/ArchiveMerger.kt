@@ -21,7 +21,7 @@ data class MergeSettings(val mid: Long, val backfillCutoff: Long?)
  * Android, fully JVM-testable.
  *
  * Rules (owner decisions, spec §SyncEngine 5–7):
- *  - Dedupe key = (recordedAt unix second, weightGrams). A hit is skipped;
+ *  - Dedupe key = (recordedAt unix second, weightCentiKg). A hit is skipped;
  *    if the hit's row has no `recordNo` yet and the incoming one does, the
  *    row gains it ([RecordNoFill]).
  *  - Category: flag 0 + our member id → MINE; flag 2 / mid 0 / any other
@@ -50,10 +50,10 @@ object ArchiveMerger {
         // Dedupe map: (recordedAt, weight) → row (existing first, then planned).
         val seen = HashMap<Pair<Long, Int>, WeighInRecord>(existing.size + incoming.size)
         val plannedIndex = HashMap<Pair<Long, Int>, Int>()
-        existing.forEach { seen[it.recordedAt to it.weightGrams] = it }
+        existing.forEach { seen[it.recordedAt to it.weightCentiKg] = it }
 
         for (w in incoming) {
-            val key = w.recordedAt to w.weightGrams
+            val key = w.recordedAt to w.weightCentiKg
             val hit = seen[key]
             if (hit != null) {
                 duplicates++
@@ -71,7 +71,7 @@ object ArchiveMerger {
             }
             val row = WeighInRecord(
                 id = 0,
-                weightGrams = w.weightGrams,
+                weightCentiKg = w.weightCentiKg,
                 recordedAt = w.recordedAt,
                 source = w.source,
                 recordNo = w.recordNo,

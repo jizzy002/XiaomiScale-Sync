@@ -1,6 +1,7 @@
 package com.xiaomiscalesync.garmin
 
 import com.xiaomiscalesync.data.GarminStatus
+import com.xiaomiscalesync.data.SyncFailureCategory
 import com.xiaomiscalesync.data.WeighInRecord
 import com.xiaomiscalesync.data.WeighInRepository
 import java.time.Clock
@@ -27,6 +28,7 @@ data class PushSummary(
     val skippedExisting: Int,
     val failed: Int,
     val authBlocked: Boolean,
+    val failure: SyncFailureCategory = SyncFailureCategory.NONE,
 )
 
 /**
@@ -71,6 +73,7 @@ class GarminPusher(
         var skipped = 0
         var failed = 0
         var authBlocked = false
+        var failure = SyncFailureCategory.NONE
         for (record in repo.pending()) {
             try {
                 val existing = garmin.weighInsOn(recordDate(record))
@@ -86,15 +89,35 @@ class GarminPusher(
                 repo.setGarminStatus(listOf(record.id), GarminStatus.AUTH_REQUIRED)
                 failed++
                 authBlocked = true
+                failure = SyncFailureCategory.AUTHENTICATION
                 break // pass stops: no further rows until the user re-signs in
+            } catch (_: GarminRateLimited) {
+                failed++
+                failure = SyncFailureCategory.RATE_LIMITED
+                break
+            } catch (_: GarminNetworkError) {
+                failed++
+                failure = SyncFailureCategory.NETWORK
+                break
+            } catch (_: GarminApiError) {
+                failed++
+                failure = SyncFailureCategory.SERVICE
+                break
             } catch (_: GarminException) {
                 // Rate limit, API, network, parse: rows stay PENDING for the
                 // WorkManager backoff retry; the pass stops here.
                 failed++
+                failure = SyncFailureCategory.UNKNOWN
                 break
             }
         }
-        return PushSummary(pushed = pushed, skippedExisting = skipped, failed = failed, authBlocked = authBlocked)
+        return PushSummary(
+            pushed = pushed,
+            skippedExisting = skipped,
+            failed = failed,
+            authBlocked = authBlocked,
+            failure = failure,
+        )
     }
 
     /**
@@ -103,15 +126,15 @@ class GarminPusher(
      * [record] — either the same GMT unix second (seconds precision;
      * milliseconds in Garmin's stamp are ignored) or, as the fallback, the
      * same calendar date **and** the same kilogram value
-     * (`valueKg == weightGrams / 100.0` — exact division of the same decimal
+     * (`valueKg == weightCentiKg / 100.0` — exact division of the same decimal
      * value, so `==` is sound; this is what catches a re-upload whose
      * timestamp drifted). A skip marks the row `SKIPPED_EXISTING` and the
      * computer setup's entry stays the single Garmin copy.
      */
     fun shouldSkip(existing: List<GarminWeighIn>, record: WeighInRecord): Boolean {
         val recordDate = recordDate(record)
-        // Unit contract: the archive's weightGrams is 1/100 kg (8025 = 80.25 kg).
-        val recordValueKg = record.weightGrams / 100.0
+        // Unit contract: the archive's weightCentiKg is 1/100 kg (8025 = 80.25 kg).
+        val recordValueKg = record.weightCentiKg / 100.0
         return existing.any { entry ->
             val entrySecond = entry.gmtTimestamp?.let { stamp ->
                 runCatching {
@@ -133,9 +156,9 @@ class GarminPusher(
     /**
      * Uploads one guard-cleared record and stamps it `PUSHED`.
      *
-     * Unit contract (Task 11 ruling): the archive's `weightGrams` is 1/100 kg
+     * Unit contract (Task 11 ruling): the archive's `weightCentiKg` is 1/100 kg
      * (8025 = 80.25 kg), so the kilogram value Garmin stores is
-     * `weightGrams / 100.0` — [GarminClient.addWeighIn] renders it into the
+     * `weightCentiKg / 100.0` — [GarminClient.addWeighIn] renders it into the
      * payload and the duplicate guard compares that same figure against
      * `GarminWeighIn.valueKg`. The local time is the record's instant in the
      * pusher clock's zone; the client derives the GMT stamp from it, so the
@@ -143,6 +166,6 @@ class GarminPusher(
      */
     private suspend fun upload(record: WeighInRecord) {
         val localTs = Instant.ofEpochSecond(record.recordedAt).atZone(clock.zone)
-        garmin.addWeighIn(record.weightGrams, localTs)
+        garmin.addWeighIn(record.weightCentiKg, localTs)
     }
 }

@@ -20,7 +20,7 @@ enum class HistoryFilter(val label: String, val category: Category?) {
 }
 
 /** One chart point: the owner's last weigh-in of [date] (1/100 kg). */
-data class DailyPoint(val date: LocalDate, val weightGrams: Int)
+data class DailyPoint(val date: LocalDate, val weightCentiKg: Int)
 
 data class HistoryUiState(
     val filter: HistoryFilter = HistoryFilter.ALL,
@@ -128,7 +128,7 @@ class HistoryViewModel(
             rows.asSequence()
                 .filter { it.category == Category.MINE }
                 .groupBy { Instant.ofEpochSecond(it.recordedAt).atZone(zone).toLocalDate() }
-                .map { (date, day) -> DailyPoint(date, day.maxBy { it.recordedAt }.weightGrams) }
+                .map { (date, day) -> DailyPoint(date, day.maxBy { it.recordedAt }.weightCentiKg) }
                 .sortedBy { it.date }
     }
 }

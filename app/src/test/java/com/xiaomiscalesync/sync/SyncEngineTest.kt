@@ -158,11 +158,11 @@ class SyncEngineTest {
 
         val archived = h.engine.onBeacon(
             weighInBeacon(3),
-            BroadcastWeighIn(profileId = 1, weightGrams = 8025, unixTs = 1_789_999_000),
+            BroadcastWeighIn(profileId = 1, weightCentiKg = 8025, unixTs = 1_789_999_000),
         )
         assertTrue(archived)
         val row = h.rows.single()
-        assertEquals(8025, row.weightGrams)
+        assertEquals(8025, row.weightCentiKg)
         assertEquals(1_789_999_000L, row.recordedAt)
         assertEquals(WeighInSource.BROADCAST, row.source)
         assertEquals(Category.MINE, row.category) // profile 1, flag 0, mid "1"
@@ -251,13 +251,13 @@ class SyncEngineTest {
         assertEquals(2, result.collected)
 
         // Mapping ruling: ts→recordedAt, no→recordNo, mid→memberMid, flag→scaleFlag.
-        val mine = h.rows.single { it.weightGrams == 8025 }
+        val mine = h.rows.single { it.weightCentiKg == 8025 }
         assertEquals(41L, mine.recordNo)
         assertEquals(1_789_999_000L, mine.recordedAt)
         assertEquals(1L, mine.memberMid)
         assertEquals(0, mine.scaleFlag)
         assertEquals(Category.MINE, mine.category)
-        val other = h.rows.single { it.weightGrams == 7260 }
+        val other = h.rows.single { it.weightCentiKg == 7260 }
         assertEquals(42L, other.recordNo)
         assertEquals(Category.NEEDS_REVIEW, other.category)
 
@@ -293,7 +293,7 @@ class SyncEngineTest {
                 fake.emitLive(7010, stable = false)
                 fake.emitLive(7020, stable = false)
                 fake.emitFinished(
-                    mid = 1, userType = 1, weightGrams = 7025, flag = 0, ts = 1_790_000_050,
+                    mid = 1, userType = 1, weightCentiKg = 7025, flag = 0, ts = 1_790_000_050,
                 )
             }
         })
@@ -310,13 +310,13 @@ class SyncEngineTest {
         watcher.cancel()
 
         // The 5.3 run surfaced on state while connected, then cleared.
-        assertTrue("live reading must surface mid-listen", seenLive.any { it?.weightGrams in 7000..7020 })
+        assertTrue("live reading must surface mid-listen", seenLive.any { it?.weightCentiKg in 7000..7020 })
         assertNull("live reading clears when the listen ends", h.engine.state.value.live)
 
         // Exactly one record, LIVE, from the 5.4 weight; recordedAt = commit time.
         val row = h.rows.single()
         assertEquals(WeighInSource.LIVE, row.source)
-        assertEquals(7025, row.weightGrams)
+        assertEquals(7025, row.weightCentiKg)
         assertEquals(now0, row.recordedAt)
         assertEquals(Category.MINE, row.category) // 5.4: flag 0, mid 1
         assertNull(row.recordNo)
@@ -345,7 +345,7 @@ class SyncEngineTest {
     @Test
     fun profileJsonMatchesPinnedTemplate() {
         val json = ProfileJson.build(
-            mid = "1", age = 30, sex = 1, heightCm = 180, weightGrams = 8025, nowUnix = 1_790_000_000L,
+            mid = "1", age = 30, sex = 1, heightCm = 180, weightCentiKg = 8025, nowUnix = 1_790_000_000L,
         )
         assertEquals(
             """{"mid":"1","duid":1,"uc":1,"ow":1,"unit":1,"time":1790000000,"ud":[{"duid":1,"ut":1,"age":30,"sex":1,"hi":180,"wt":8025}]}""",
@@ -427,12 +427,12 @@ class SyncEngineTest {
         assertTrue(result!!.success)
         assertEquals(3, result.collected) // the implausible weight never lands
 
-        val pairs = h.rows.map { it.weightGrams to it.recordedAt }.toSet()
+        val pairs = h.rows.map { it.weightCentiKg to it.recordedAt }.toSet()
         assertEquals(
             setOf(8025 to 1_789_999_000L, 8100 to now0, 8200 to now0),
             pairs,
         )
-        assertTrue(h.rows.none { it.weightGrams == 50 })
+        assertTrue(h.rows.none { it.weightCentiKg == 50 })
     }
 
     // ---------- (n) broadcast: timestamp sanity + weight gate ----------
@@ -548,7 +548,7 @@ class SyncEngineTest {
 
         val row = h.rows.single()
         assertEquals(WeighInSource.LIVE, row.source)
-        assertEquals(7160, row.weightGrams) // the last stable weight
+        assertEquals(7160, row.weightCentiKg) // the last stable weight
         assertEquals(Category.NEEDS_REVIEW, row.category) // attribution is ambiguous
         assertEquals(now0, row.recordedAt) // commit time
         assertNull(row.recordNo)

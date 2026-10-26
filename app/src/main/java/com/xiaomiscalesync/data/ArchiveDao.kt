@@ -24,11 +24,15 @@ interface ArchiveDao {
     @Query("SELECT * FROM weigh_ins")
     suspend fun all(): List<WeighInRecord>
 
-    // IGNORE (not the @Insert default ABORT): the (recordedAt, weightGrams)
+    // IGNORE (not the @Insert default ABORT): the (recordedAt, weightCentiKg)
     // unique index means a concurrent merge planning the same key must drop
     // the duplicate row, not throw and abort the batch.
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(record: WeighInRecord): Long
+
+    /** One Room transaction; unique archive-key conflicts are ignored. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAll(records: List<WeighInRecord>): List<Long>
 
     @Query("UPDATE weigh_ins SET recordNo = :recordNo WHERE id = :id AND recordNo IS NULL")
     suspend fun fillRecordNo(id: Long, recordNo: Long)

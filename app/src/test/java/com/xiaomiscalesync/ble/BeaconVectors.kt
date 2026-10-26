@@ -50,7 +50,7 @@ object BeaconVectors {
                     val w = weighIn.asJsonObject
                     BroadcastWeighIn(
                         profileId = w.get("profileId").asInt,
-                        weightGrams = w.get("weightGrams").asInt,
+                        weightCentiKg = w.get("weightCentiKg").asInt,
                         unixTs = w.get("unixTs").asLong,
                     )
                 },

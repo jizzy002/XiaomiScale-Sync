@@ -2,7 +2,9 @@ package com.xiaomiscalesync.ui.onboarding
 
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -25,6 +28,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,16 +42,18 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xiaomiscalesync.garmin.GarminAuthError
 import com.xiaomiscalesync.ui.CodePrompt
+import com.xiaomiscalesync.ui.SignInDisclosure
+import com.xiaomiscalesync.ui.SignInProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -76,7 +82,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
                 TopAppBar(
                     title = {
                         Column {
-                            Text("Set up Scale Sync")
+                            Text("Scale Sync")
                             Text(
                                 "Step ${state.step.ordinal + 1} of ${OnboardingStep.entries.size} · " +
                                     STEP_TITLES.getValue(state.step),
@@ -86,14 +92,27 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
                         }
                     },
                 )
-                if (state.busy) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                } else {
-                    LinearProgressIndicator(
-                        progress = { (state.step.ordinal + 1f) / OnboardingStep.entries.size },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    OnboardingStep.entries.forEachIndexed { index, _ ->
+                        val completed = index <= state.step.ordinal
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .background(
+                                    if (completed) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                    RoundedCornerShape(50),
+                                ),
+                        )
+                    }
                 }
+                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
         },
     ) { padding ->
@@ -172,158 +191,272 @@ private fun MiKeysStep(
 ) {
     var user by rememberSaveable { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
+    var passVisible by rememberSaveable { mutableStateOf(false) }
+    var replacingSavedKeys by rememberSaveable { mutableStateOf(false) }
     val enabled = !state.busy
 
-    if (!state.manualMode) {
-        OutlinedTextField(
-            value = user,
-            onValueChange = { user = it },
-            label = { Text("Mi account email / phone") },
-            singleLine = true,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = pass,
-            onValueChange = { pass = it },
-            label = { Text("Mi account password") },
-            singleLine = true,
-            enabled = enabled,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
+    val allKeys = state.macOk && state.tokenOk && state.bleKeyOk
+    val hasManualDraft = listOf(state.manualMac, state.manualToken, state.manualBleKey)
+        .any { it.isNotBlank() }
+    val replacingKeys = state.manualMode && allKeys && (hasManualDraft || replacingSavedKeys)
+    val showingSavedKeys = state.manualMode && allKeys && !replacingKeys
+    StepPanel(
+        title = when {
+            showingSavedKeys -> "Scale keys are ready"
+            replacingKeys -> "Replace your scale keys"
+            state.manualMode -> "Enter your scale keys"
+            else -> "Connect your Xiaomi scale"
+        },
+        supportingText = when {
+            showingSavedKeys ->
+                "Your keys are stored encrypted on this phone. Continue with them or replace them manually."
+            replacingKeys ->
+                "Enter all three new values. The saved keys stay in place until the new ones pass validation."
+            state.manualMode ->
+                "Enter the MAC address, TOKEN and BLE KEY to connect without signing in to Xiaomi."
+            else -> "Sign in to find your scale and retrieve its Bluetooth keys."
+        },
+    ) {
+        if (!state.manualMode) {
+            OutlinedTextField(
+                value = user,
+                onValueChange = { user = it },
+                label = { Text("Email or phone") },
+                singleLine = true,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = pass,
+                onValueChange = { pass = it },
+                label = { Text("Password") },
+                singleLine = true,
+                enabled = enabled,
+                visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    TextButton(onClick = { passVisible = !passVisible }, enabled = enabled) {
+                        Text(if (passVisible) "Hide" else "Show")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SignInDisclosure(SignInProvider.XIAOMI)
+            if (allKeys) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            viewModel.extractKeys(
+                                user,
+                                pass,
+                                onCaptcha = onCaptcha,
+                                onSecondFactor = onSecondFactor,
+                            )
+                        }
+                    },
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Refresh scale keys")
+                }
+                ManualKeysButton(enabled = enabled) {
+                    viewModel.setManualMode(true)
+                }
+            } else {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            viewModel.extractKeys(
+                                user,
+                                pass,
+                                onCaptcha = onCaptcha,
+                                onSecondFactor = onSecondFactor,
+                            )
+                        }
+                    },
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Connect Xiaomi")
+                }
+                ManualKeysButton(enabled = enabled) {
+                    viewModel.setManualMode(true)
+                }
+            }
+        } else {
+            if (showingSavedKeys) {
+                OutlinedButton(
+                    onClick = { replacingSavedKeys = true },
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Replace saved keys")
+                }
+            } else {
+                OutlinedTextField(
+                    value = state.manualMac,
+                    onValueChange = {
+                        viewModel.setManualMac(it)
+                        if (allKeys) replacingSavedKeys = true
+                    },
+                    label = { Text("MAC address") },
+                    supportingText = { Text("Example: AA:BB:CC:DD:EE:FF") },
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = state.manualToken,
+                    onValueChange = {
+                        viewModel.setManualToken(it)
+                        if (allKeys) replacingSavedKeys = true
+                    },
+                    label = { Text("TOKEN") },
+                    supportingText = { Text("24 hexadecimal characters") },
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = state.manualBleKey,
+                    onValueChange = {
+                        viewModel.setManualBleKey(it)
+                        if (allKeys) replacingSavedKeys = true
+                    },
+                    label = { Text("BLE KEY") },
+                    supportingText = { Text("32 hexadecimal characters") },
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Keys are stored encrypted on this phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (!allKeys && !showingSavedKeys) {
+                Button(
+                    onClick = { viewModel.submitManualKeys() },
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Save scale keys")
+                }
+            }
+            if (!showingSavedKeys) {
+                if (replacingKeys) {
+                    TextButton(
+                        onClick = {
+                            viewModel.setManualMac("")
+                            viewModel.setManualToken("")
+                            viewModel.setManualBleKey("")
+                            replacingSavedKeys = false
+                        },
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Cancel replacement")
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { viewModel.setManualMode(false) },
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Sign in with Xiaomi instead")
+                    }
+                }
+            }
+        }
+
+        state.foundScale?.let { found ->
+            Text(
+                "Scale found: $found",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (!showingSavedKeys) KeyStatusRow(state)
+        if (!allKeys) {
+            Text(
+                "All three keys are needed before continuing.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (allKeys) {
         Button(
             onClick = {
-                scope.launch {
-                    viewModel.extractKeys(
-                        user,
-                        pass,
-                        onCaptcha = onCaptcha,
-                        onSecondFactor = onSecondFactor,
-                    )
+                val continueAllowed = if (state.manualMode && (hasManualDraft || replacingSavedKeys)) {
+                    viewModel.submitManualKeys()
+                    viewModel.state.value.error == null
+                } else {
+                    true
+                }
+                if (continueAllowed) {
+                    viewModel.nextFromKeys()
                 }
             },
             enabled = enabled,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Extract keys (Mi sign-in)")
+            Text(if (replacingKeys) "Save keys and continue" else "Continue")
         }
-        TextButton(onClick = { viewModel.setManualMode(true) }, enabled = enabled) {
-            Text("I already have the keys")
-        }
-    } else {
-        OutlinedTextField(
-            value = state.manualMac,
-            onValueChange = viewModel::setManualMac,
-            label = { Text("MAC (AA:BB:CC:DD:EE:FF)") },
-            singleLine = true,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.manualToken,
-            onValueChange = viewModel::setManualToken,
-            label = { Text("TOKEN (24 hex chars)") },
-            singleLine = true,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.manualBleKey,
-            onValueChange = viewModel::setManualBleKey,
-            label = { Text("BLE KEY (32 hex chars)") },
-            singleLine = true,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(
-            onClick = { viewModel.submitManualKeys() },
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Use these keys")
-        }
-        TextButton(onClick = { viewModel.setManualMode(false) }, enabled = enabled) {
-            Text("Sign in with my Mi account instead")
-        }
-    }
-
-    state.foundScale?.let { found ->
-        Text(
-            "Found: $found",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    KeyStatusRow(state)
-
-    val allKeys = state.macOk && state.tokenOk && state.bleKeyOk
-    if (!allKeys) {
-        Text(
-            "All three keys are needed to continue — extract them or paste them.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    Button(
-        onClick = { viewModel.nextFromKeys() },
-        enabled = enabled && allKeys,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("Next")
     }
 }
 
 // -------------------------------------------------------------- step 2
 
-/** Step 2 — profile: height cm, age, sex, unit (fixed kg v1). */
+/** Step 2 — profile: height, age and sex sent as scale metadata. */
 @Composable
 private fun ProfileStep(state: OnboardingState, viewModel: OnboardingViewModel) {
-    OutlinedTextField(
-        value = state.heightCm,
-        onValueChange = viewModel::setHeightCm,
-        label = { Text("Height (cm)") },
-        singleLine = true,
-        enabled = !state.busy,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = state.age,
-        onValueChange = viewModel::setAge,
-        label = { Text("Age") },
-        singleLine = true,
-        enabled = !state.busy,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.fillMaxWidth(),
-    )
+    StepPanel(
+        title = "Your profile",
+        supportingText = "Set up the profile details used with your scale.",
+    ) {
+        OutlinedTextField(
+            value = state.heightCm,
+            onValueChange = viewModel::setHeightCm,
+            label = { Text("Height (cm)") },
+            singleLine = true,
+            enabled = !state.busy,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.age,
+            onValueChange = viewModel::setAge,
+            label = { Text("Age") },
+            singleLine = true,
+            enabled = !state.busy,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
 
-    Text("Sex", style = MaterialTheme.typography.bodyLarge)
-    SEX_OPTIONS.forEach { (value, label) ->
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(
-                selected = state.sex == value,
-                onClick = { viewModel.setSex(value) },
-                enabled = !state.busy,
-            )
-            Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text("Sex", style = MaterialTheme.typography.titleSmall)
+        SEX_OPTIONS.forEach { (value, label) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = state.sex == value,
+                    onClick = { viewModel.setSex(value) },
+                    enabled = !state.busy,
+                )
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+            }
         }
-    }
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Unit", style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.width(8.dp))
-        Text("kg", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Unit", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.width(8.dp))
+            Text("kg", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+        }
+        Text(
+            "The scale reports weight in kilograms. You can choose kg or lb for display later.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
-    Text(
-        "Fixed to kilograms in v1.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-
-    // No Member ID here (owner ruling 2026-10-13): a wrong value silently
-    // sends every weigh-in to Needs review. The wizard always uses the
-    // default "1"; migrating users change it under Profile → Advanced.
 
     StepFooter(
         backEnabled = !state.busy,
@@ -343,28 +476,28 @@ private fun ProfileStep(state: OnboardingState, viewModel: OnboardingViewModel) 
  */
 @Composable
 private fun HistoryStep(state: OnboardingState, viewModel: OnboardingViewModel) {
-    Text(
-        "Did a previous setup already sync your history to Garmin?",
-        style = MaterialTheme.typography.titleMedium,
-    )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(
-            checked = state.historyAlreadySynced,
-            onCheckedChange = viewModel::setHistoryAlreadySynced,
-            enabled = !state.busy,
+    StepPanel(
+        title = "Garmin history",
+        supportingText = "Did a previous setup already sync your weigh-ins to Garmin?",
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = state.historyAlreadySynced,
+                onCheckedChange = viewModel::setHistoryAlreadySynced,
+                enabled = !state.busy,
+            )
+            Text("Yes, my history is already in Garmin", style = MaterialTheme.typography.bodyLarge)
+        }
+        Text(
+            if (state.historyAlreadySynced) {
+                "Older records will stay in the app archive and won’t be uploaded again."
+            } else {
+                "A fresh start: captured weigh-ins, including older records, can be uploaded."
+            },
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text("Yes — my history is already in Garmin", style = MaterialTheme.typography.bodyMedium)
     }
-    Text(
-        if (state.historyAlreadySynced) {
-            "Older records will be kept in the app archive but never pushed — Garmin already " +
-                "has them (they show as \"Skipped (already in Garmin)\")."
-        } else {
-            "Everything captured will be pushable, including older records — a fresh start."
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
 
     StepFooter(
         backEnabled = !state.busy,
@@ -389,53 +522,80 @@ private fun GarminStep(
 ) {
     var email by rememberSaveable { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
+    var passVisible by rememberSaveable { mutableStateOf(false) }
     val enabled = !state.busy
 
-    OutlinedTextField(
-        value = email,
-        onValueChange = { email = it },
-        label = { Text("Garmin email") },
-        singleLine = true,
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = pass,
-        onValueChange = { pass = it },
-        label = { Text("Garmin password") },
-        singleLine = true,
-        enabled = enabled,
-        visualTransformation = PasswordVisualTransformation(),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Button(
-        onClick = {
-            scope.launch {
-                viewModel.garminSignIn(email, pass) { method ->
-                    onMfa(method) ?: throw GarminAuthError("Garmin MFA dialog cancelled")
-                }
-            }
-        },
-        enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
+    if (!state.garminSignedIn) StepPanel(
+        title = "Connect Garmin",
+        supportingText = "Send your weigh-ins to Garmin Connect.",
     ) {
-        Text("Sign in to Garmin")
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email") },
+            singleLine = true,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = pass,
+            onValueChange = { pass = it },
+            label = { Text("Password") },
+            singleLine = true,
+            enabled = enabled,
+            visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                TextButton(onClick = { passVisible = !passVisible }, enabled = enabled) {
+                    Text(if (passVisible) "Hide" else "Show")
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SignInDisclosure(SignInProvider.GARMIN)
+        Button(
+            onClick = {
+                scope.launch {
+                    viewModel.garminSignIn(email, pass) { method ->
+                        onMfa(method) ?: throw GarminAuthError("Garmin MFA dialog cancelled")
+                    }
+                }
+            },
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Connect Garmin")
+        }
     }
     if (state.garminSignedIn) {
-        Text(
-            "✔ Signed in as ${state.garminUser}",
-            color = Color(0xFF1B8E3D),
-            fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        StepPanel(
+            title = "Garmin connected",
+            supportingText = "Your account is ready to receive weigh-ins.",
+        ) {
+            Text(
+                "Connected as ${state.garminUser}",
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
     }
 
-    StepFooter(
-        backEnabled = enabled,
-        back = viewModel::back,
-        nextEnabled = enabled && state.garminSignedIn,
-        next = viewModel::nextFromGarmin,
-    )
+    if (state.garminSignedIn) {
+        StepFooter(
+            backEnabled = enabled,
+            back = viewModel::back,
+            nextEnabled = enabled,
+            next = viewModel::nextFromGarmin,
+        )
+    } else {
+        OutlinedButton(
+            onClick = viewModel::back,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Back")
+        }
+    }
 }
 
 // -------------------------------------------------------------- step 5
@@ -447,17 +607,21 @@ private fun DoneStep(
     viewModel: OnboardingViewModel,
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
-    Text("All set", style = MaterialTheme.typography.titleMedium)
-    Text("✔ Scale keys stored (MAC, TOKEN, BLE KEY)")
-    Text("✔ Profile: ${state.heightCm} cm, age ${state.age}, Member ID ${state.mid}")
-    Text(
-        if (state.historyAlreadySynced) {
-            "✔ Existing history stays archive-only (skipped — already in Garmin)"
-        } else {
-            "✔ Fresh start — everything captured will be pushable"
-        },
-    )
-    Text("✔ Garmin connected as ${state.garminUser}")
+    StepPanel(
+        title = "Setup complete",
+        supportingText = "Review your choices, then finish setting up Scale Sync.",
+    ) {
+        Text("Scale keys · MAC, TOKEN and BLE KEY stored")
+        Text("Profile · ${state.heightCm} cm, age ${state.age}")
+        Text(
+            if (state.historyAlreadySynced) {
+                "History · existing Garmin records stay archive-only"
+            } else {
+                "History · captured weigh-ins are ready to upload"
+            },
+        )
+        Text("Garmin Connect · ${state.garminUser}")
+    }
     Button(
         onClick = { scope.launch { viewModel.complete() } },
         enabled = !state.busy && !state.completed,
@@ -465,7 +629,11 @@ private fun DoneStep(
     ) {
         Text("Finish")
     }
-    TextButton(onClick = { viewModel.back() }, enabled = !state.busy) {
+    OutlinedButton(
+        onClick = { viewModel.back() },
+        enabled = !state.busy,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Text("Back")
     }
 }
@@ -481,17 +649,68 @@ private fun StepFooter(
     nextEnabled: Boolean,
     next: () -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = back, enabled = backEnabled) {
-            Text("Back")
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(onClick = next, enabled = nextEnabled, modifier = Modifier.fillMaxWidth()) {
+            Text("Continue")
         }
-        Button(onClick = next, enabled = nextEnabled, modifier = Modifier.weight(1f)) {
-            Text("Next")
+        OutlinedButton(onClick = back, enabled = backEnabled, modifier = Modifier.fillMaxWidth()) {
+            Text("Back")
         }
     }
 }
 
-/** The three key indicators — green ✔ per stored key (values never shown). */
+/** Shared open layout for a step heading, short explanation and its content. */
+@Composable
+private fun StepPanel(
+    title: String,
+    supportingText: String,
+    content: @Composable () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.headlineSmall)
+            Text(
+                supportingText,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        content()
+    }
+}
+
+/** A clear alternate route for people who already have their Bluetooth keys. */
+@Composable
+private fun ManualKeysButton(enabled: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 68.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text("Enter keys manually", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "MAC address · TOKEN · BLE KEY",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** The three key indicators show readiness without exposing key values. */
 @Composable
 private fun KeyStatusRow(state: OnboardingState) {
     Row(
@@ -507,8 +726,8 @@ private fun KeyStatusRow(state: OnboardingState) {
 @Composable
 private fun KeyChip(label: String, ok: Boolean) {
     Text(
-        "${if (ok) "✔" else "○"} $label",
-        color = if (ok) Color(0xFF1B8E3D) else Color(0xFF9E9E9E),
+        "$label ${if (ok) "ready" else "needed"}",
+        color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         fontWeight = if (ok) FontWeight.Bold else FontWeight.Normal,
         fontSize = 13.sp,
     )

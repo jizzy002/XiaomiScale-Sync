@@ -1,6 +1,7 @@
 package com.xiaomiscalesync.ui.debug
 
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import com.xiaomiscalesync.garmin.GarminTokens
 import com.xiaomiscalesync.garmin.TokenStore
 import java.util.Locale
@@ -81,11 +82,11 @@ class SpikeKeyHolder(private val prefs: SharedPreferences) {
         require(isHex(tokenHex, 24)) { "TOKEN is not 24 hex characters" }
         require(bleKeyHex == null || isHex(bleKeyHex, 32)) { "BLE KEY is not 32 hex characters" }
         val normalizedMac = normalizeMac(mac)
-        prefs.edit()
-            .putString(KEY_MAC, normalizedMac)
-            .putString(KEY_TOKEN, tokenHex)
-            .putString(KEY_BLE_KEY, bleKeyHex)
-            .apply()
+        prefs.edit {
+            putString(KEY_MAC, normalizedMac)
+            putString(KEY_TOKEN, tokenHex)
+            putString(KEY_BLE_KEY, bleKeyHex)
+        }
         this.mac = normalizedMac
         this.tokenHex = tokenHex
         this.bleKeyHex = bleKeyHex
@@ -120,11 +121,11 @@ class SharedTokenStore(private val prefs: SharedPreferences) : TokenStore {
     }
 
     override suspend fun save(tokens: GarminTokens) {
-        prefs.edit()
-            .putString(KEY_ACCESS, tokens.accessToken)
-            .putString(KEY_REFRESH, tokens.refreshToken)
-            .putString(KEY_CLIENT, tokens.clientId)
-            .putLong(KEY_EXPIRES, tokens.expiresAtMillis ?: -1L)
-            .apply()
+        prefs.edit {
+            putString(KEY_ACCESS, tokens.accessToken)
+            putString(KEY_REFRESH, tokens.refreshToken)
+            putString(KEY_CLIENT, tokens.clientId)
+            putLong(KEY_EXPIRES, tokens.expiresAtMillis ?: -1L)
+        }
     }
 }

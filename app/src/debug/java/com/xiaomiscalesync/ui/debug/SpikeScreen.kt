@@ -296,7 +296,7 @@ class SpikeController(private val appContext: Context) {
         }
         if (handled && weighIn != null) {
             log(
-                "weigh-in broadcast handled: ${fmtWeight(weighIn.weightGrams)} kg at " +
+                "weigh-in broadcast handled: ${fmtWeight(weighIn.weightCentiKg)} kg at " +
                     "${fmtTs(weighIn.unixTs)} (archive dedupes repeats)",
             )
         }
@@ -461,8 +461,8 @@ class SpikeController(private val appContext: Context) {
         fun sanitize(text: String?): String = ScaleScanner.sanitize(text)
 
         /** 1/100 kg → `80.25 kg`. */
-        fun fmtWeight(weight100: Int): String =
-            String.format(Locale.US, "%.2f", weight100 / 100.0)
+        fun fmtWeight(weightCentiKg: Int): String =
+            String.format(Locale.US, "%.2f", weightCentiKg / 100.0)
 
         private val TS_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
@@ -522,7 +522,7 @@ fun SpikeScreen(controller: SpikeController) {
 
             records.take(5).forEach { record ->
                 Text(
-                    "${SpikeController.fmtWeight(record.weightGrams)} kg  " +
+                    "${SpikeController.fmtWeight(record.weightCentiKg)} kg  " +
                         "${SpikeController.fmtTs(record.recordedAt)}  " +
                         "${record.source} · ${record.category} · ${record.garminStatus}",
                     style = MaterialTheme.typography.bodySmall,

@@ -124,7 +124,7 @@ class ProfileViewModelTest {
         val p = s.toProfile(8420)
         assertEquals(
             """{"mid":"3","duid":1,"uc":1,"ow":1,"unit":1,"time":1,"ud":[{"duid":1,"ut":1,"age":41,"sex":2,"hi":176,"wt":8420}]}""",
-            ProfileJson.build(p.mid, p.age, p.sex, p.heightCm, p.weightGrams, nowUnix = 1),
+            ProfileJson.build(p.mid, p.age, p.sex, p.heightCm, p.weightCentiKg, nowUnix = 1),
         )
         assertNull(h.vm.state.value.error)
     }
