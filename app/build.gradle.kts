@@ -52,7 +52,7 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.2.1")
 
     // Xiaomi cloud client (Task 10): HTTP + JSON. MockWebServer below is test-only.
-    implementation("com.squareup.okhttp3:okhttp:5.5.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.1")
     implementation("com.google.code.gson:gson:2.14.0")
 
     // Garmin push queue (Task 12): one-shot, uniquely-named retry work.
@@ -60,7 +60,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.12.0")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
 
     androidTestImplementation("androidx.test:core:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
