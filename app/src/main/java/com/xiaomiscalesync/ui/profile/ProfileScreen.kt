@@ -59,7 +59,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.xiaomiscalesync.AppGraph
 import com.xiaomiscalesync.data.Settings
-import com.xiaomiscalesync.data.ThemeMode
 import com.xiaomiscalesync.data.WeightUnit
 import com.xiaomiscalesync.garmin.GarminAuthError
 import com.xiaomiscalesync.ui.CodePrompt
@@ -237,26 +236,6 @@ fun ProfileScreen(onOpenDebug: (() -> Unit)?) {
                 }
                 Text(
                     "Changes weight display only. The scale and Garmin always use kg.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            // ------------------------------------------------ appearance
-            Section("Appearance") {
-                val settings by graph.settings.settings.collectAsState(initial = null)
-                val current = settings?.themeMode ?: ThemeMode.SYSTEM
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    ThemeMode.entries.forEachIndexed { i, mode ->
-                        SegmentedButton(
-                            selected = mode == current,
-                            onClick = { scope.launch { graph.settings.setThemeMode(mode) } },
-                            shape = SegmentedButtonDefaults.itemShape(i, ThemeMode.entries.size),
-                        ) { Text(mode.label) }
-                    }
-                }
-                Text(
-                    "Android 12+ uses your wallpaper colors. Older versions use the app's default colors.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

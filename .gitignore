@@ -24,3 +24,9 @@ captures/
 
 # Owner's Next.js design prototype — kept locally, not part of the app (plain Material 3 chosen)
 app-design/
+
+# Connect IQ watch app experiment — keep local while it is paused
+/watch/
+/scripts/garmin_token.py
+/scripts/watch_vectors.py
+__pycache__/

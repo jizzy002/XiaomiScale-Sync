@@ -29,23 +29,12 @@ data class Settings(
     /** Account identifiers shown on the Profile tab (never passwords or keys). */
     val miAccount: String? = null,
     val garminEmail: String? = null,
-    /** App appearance; SYSTEM follows the phone's dark-mode setting. */
-    val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** Unit used only when displaying archived and live weights in the app. */
     val weightUnit: WeightUnit = WeightUnit.KG,
 ) {
     companion object {
         const val DEFAULT_MID = "1"
         val DEFAULT = Settings(onboarded = false, backfillCutoff = null, mid = DEFAULT_MID)
-    }
-}
-
-/** App appearance choice (Profile tab). */
-enum class ThemeMode(val label: String) {
-    SYSTEM("System"), LIGHT("Light"), DARK("Dark");
-
-    companion object {
-        fun fromStoredName(name: String?): ThemeMode = entries.firstOrNull { it.name == name } ?: SYSTEM
     }
 }
 
@@ -128,11 +117,6 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         dataStore.edit { it[KEY_GARMIN_EMAIL] = v }
     }
 
-    /** A pure UI preference — not part of [SettingsWriter]'s onboarding seam. */
-    suspend fun setThemeMode(v: ThemeMode) {
-        dataStore.edit { it[KEY_THEME] = v.name }
-    }
-
     /** A display-only preference; it never changes stored weights or sync payloads. */
     suspend fun setWeightUnit(v: WeightUnit) {
         dataStore.edit { it[KEY_WEIGHT_UNIT] = v.name }
@@ -147,7 +131,6 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         sex = this[KEY_SEX] ?: 1,
         miAccount = this[KEY_MI_ACCOUNT],
         garminEmail = this[KEY_GARMIN_EMAIL],
-        themeMode = ThemeMode.fromStoredName(this[KEY_THEME]),
         weightUnit = WeightUnit.fromStoredName(this[KEY_WEIGHT_UNIT]),
     )
 
@@ -160,7 +143,6 @@ class SettingsStore(private val dataStore: DataStore<Preferences>) : SettingsSou
         private val KEY_SEX = intPreferencesKey("sex")
         private val KEY_MI_ACCOUNT = stringPreferencesKey("mi_account")
         private val KEY_GARMIN_EMAIL = stringPreferencesKey("garmin_email")
-        private val KEY_THEME = stringPreferencesKey("theme_mode")
         private val KEY_WEIGHT_UNIT = stringPreferencesKey("weight_unit")
         fun of(context: Context): SettingsStore = SettingsStore(context.settingsDataStore)
     }

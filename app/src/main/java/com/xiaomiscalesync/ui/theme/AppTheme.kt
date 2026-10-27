@@ -13,7 +13,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
-import com.xiaomiscalesync.data.ThemeMode
 
 private fun fallbackLightColors() = lightColorScheme(
     primary = Color(0xFF006A60),
@@ -81,24 +80,13 @@ private val AppShapes = Shapes(
     extraLarge = RoundedCornerShape(32.dp),
 )
 
-/** Whether [mode] resolves to dark right now. */
-@Composable
-fun ThemeMode.isDark(): Boolean = when (this) {
-    ThemeMode.SYSTEM -> isSystemInDarkTheme()
-    ThemeMode.LIGHT -> false
-    ThemeMode.DARK -> true
-}
-
 /**
- * Material 3 theme: Android 12+ follows the wallpaper palette in every
- * appearance mode; older Android versions use one calm built-in palette.
+ * Material 3 follows the system appearance and Android 12+ wallpaper palette.
+ * Older Android versions use one calm built-in palette.
  */
 @Composable
-fun AppTheme(
-    mode: ThemeMode = ThemeMode.SYSTEM,
-    content: @Composable () -> Unit,
-) {
-    val dark = mode.isDark()
+fun AppTheme(content: @Composable () -> Unit) {
+    val dark = isSystemInDarkTheme()
     val colors = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val context = LocalContext.current
         if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)

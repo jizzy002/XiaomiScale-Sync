@@ -274,7 +274,7 @@ class OnboardingViewModel(
                         !tokenOk -> "scale found but its TOKEN is missing — paste the keys manually"
                         !bleKeyOk ->
                             "BLE KEY not found for this scale — required to finish; " +
-                                "paste it with \"I already have the keys\""
+                                "paste it with \"Enter keys manually\""
                         else -> null
                     },
                 )

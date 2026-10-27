@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -24,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,6 +47,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
@@ -54,7 +60,6 @@ import com.xiaomiscalesync.garmin.GarminAuthError
 import com.xiaomiscalesync.ui.CodePrompt
 import com.xiaomiscalesync.ui.SignInDisclosure
 import com.xiaomiscalesync.ui.SignInProvider
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -75,6 +80,67 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
     val scope = rememberCoroutineScope()
     val miPrompt = remember { CodePrompt() }
     val garminPrompt = remember { CodePrompt() }
+    var miUser by rememberSaveable { mutableStateOf("") }
+    var miPass by remember { mutableStateOf("") }
+    var miPassVisible by rememberSaveable { mutableStateOf(false) }
+    var replacingSavedKeys by rememberSaveable { mutableStateOf(false) }
+    var garminEmail by rememberSaveable { mutableStateOf("") }
+    var garminPass by remember { mutableStateOf("") }
+    var garminPassVisible by rememberSaveable { mutableStateOf(false) }
+
+    val allKeys = state.macOk && state.tokenOk && state.bleKeyOk
+    val hasManualDraft = listOf(state.manualMac, state.manualToken, state.manualBleKey)
+        .any { it.isNotBlank() }
+    val replacingKeys = state.manualMode && allKeys && (hasManualDraft || replacingSavedKeys)
+    val showingSavedKeys = state.manualMode && allKeys && !replacingKeys
+    val primaryLabel = when (state.step) {
+        OnboardingStep.MI_KEYS -> when {
+            state.manualMode && !showingSavedKeys -> "Save keys and continue"
+            allKeys -> "Continue"
+            else -> "Connect Xiaomi"
+        }
+        OnboardingStep.PROFILE, OnboardingStep.HISTORY -> "Continue"
+        OnboardingStep.GARMIN -> if (state.garminSignedIn) "Continue" else "Connect Garmin"
+        OnboardingStep.DONE -> "Finish setup"
+    }
+    val onPrimary: () -> Unit = when (state.step) {
+        OnboardingStep.MI_KEYS -> {
+            {
+                when {
+                    state.manualMode && !showingSavedKeys -> {
+                        viewModel.submitManualKeys()
+                        if (viewModel.state.value.error == null) viewModel.nextFromKeys()
+                    }
+                    allKeys -> viewModel.nextFromKeys()
+                    else -> scope.launch {
+                        viewModel.extractKeys(
+                            miUser,
+                            miPass,
+                            onCaptcha = { image, url -> miPrompt.askCaptcha(image, url) },
+                            onSecondFactor = { prompt -> miPrompt.ask(prompt) },
+                        )
+                    }
+                }
+            }
+        }
+        OnboardingStep.PROFILE -> viewModel::nextFromProfile
+        OnboardingStep.HISTORY -> viewModel::nextFromHistory
+        OnboardingStep.GARMIN -> {
+            {
+                if (state.garminSignedIn) {
+                    viewModel.nextFromGarmin()
+                } else {
+                    scope.launch {
+                        viewModel.garminSignIn(garminEmail, garminPass) { method ->
+                            garminPrompt.ask("Garmin MFA via $method — enter the emailed code")
+                                ?: throw GarminAuthError("Garmin MFA dialog cancelled")
+                        }
+                    }
+                }
+            }
+        }
+        OnboardingStep.DONE -> { { scope.launch { viewModel.complete() } } }
+    }
 
     Scaffold(
         topBar = {
@@ -82,7 +148,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
                 TopAppBar(
                     title = {
                         Column {
-                            Text("Scale Sync")
+                            Text("Set up Scale Sync")
                             Text(
                                 "Step ${state.step.ordinal + 1} of ${OnboardingStep.entries.size} · " +
                                     STEP_TITLES.getValue(state.step),
@@ -115,21 +181,26 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
                 if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
         },
+        bottomBar = {
+            OnboardingFooter(
+                primaryLabel = primaryLabel,
+                primaryEnabled = !state.busy && !state.completed,
+                onPrimary = onPrimary,
+                onBack = if (state.step == OnboardingStep.MI_KEYS) null else viewModel::back,
+                backEnabled = !state.busy,
+            )
+        },
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             state.error?.let { message ->
-                Text(
-                    message,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                OnboardingError(message)
             }
 
             when (state.step) {
@@ -137,21 +208,41 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
                     MiKeysStep(
                         state,
                         viewModel,
-                        scope,
-                        onCaptcha = { image, url -> miPrompt.askCaptcha(image, url) },
-                        onSecondFactor = { prompt -> miPrompt.ask(prompt) },
+                        user = miUser,
+                        pass = miPass,
+                        passVisible = miPassVisible,
+                        onUserChange = { miUser = it },
+                        onPassChange = { miPass = it },
+                        onPassVisibilityChange = { miPassVisible = it },
+                        replacingSavedKeys = replacingSavedKeys,
+                        onReplacingSavedKeysChange = { replacingSavedKeys = it },
+                        onRefresh = {
+                            scope.launch {
+                                viewModel.extractKeys(
+                                    miUser,
+                                    miPass,
+                                    onCaptcha = { image, url -> miPrompt.askCaptcha(image, url) },
+                                    onSecondFactor = { prompt -> miPrompt.ask(prompt) },
+                                )
+                            }
+                        },
                     )
 
                 OnboardingStep.PROFILE -> ProfileStep(state, viewModel)
                 OnboardingStep.HISTORY -> HistoryStep(state, viewModel)
 
                 OnboardingStep.GARMIN ->
-                    GarminStep(state, viewModel, scope) { method ->
-                        garminPrompt.ask("Garmin MFA via $method — enter the emailed code")
-                            ?: throw GarminAuthError("Garmin MFA dialog cancelled")
-                    }
+                    GarminStep(
+                        state = state,
+                        email = garminEmail,
+                        pass = garminPass,
+                        passVisible = garminPassVisible,
+                        onEmailChange = { garminEmail = it },
+                        onPassChange = { garminPass = it },
+                        onPassVisibilityChange = { garminPassVisible = it },
+                    )
 
-                OnboardingStep.DONE -> DoneStep(state, viewModel, scope)
+                OnboardingStep.DONE -> DoneStep(state)
             }
         }
     }
@@ -177,7 +268,7 @@ private val STEP_TITLES = mapOf(
 
 /**
  * Step 1 — Mi Account sign-in with the extracted MAC/TOKEN/BLE KEY shown
- * as three green checks, or the "I already have the keys" manual-paste
+ * as three green checks, or the "Enter keys manually" manual-paste
  * path. [onCaptcha] answers the in-app captcha dialog; 2FA and captcha
  * both suspend inside [OnboardingViewModel.extractKeys].
  */
@@ -185,14 +276,16 @@ private val STEP_TITLES = mapOf(
 private fun MiKeysStep(
     state: OnboardingState,
     viewModel: OnboardingViewModel,
-    scope: CoroutineScope,
-    onCaptcha: suspend (ByteArray, String) -> String?,
-    onSecondFactor: suspend (String) -> String?,
+    user: String,
+    pass: String,
+    passVisible: Boolean,
+    onUserChange: (String) -> Unit,
+    onPassChange: (String) -> Unit,
+    onPassVisibilityChange: (Boolean) -> Unit,
+    replacingSavedKeys: Boolean,
+    onReplacingSavedKeysChange: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
 ) {
-    var user by rememberSaveable { mutableStateOf("") }
-    var pass by remember { mutableStateOf("") }
-    var passVisible by rememberSaveable { mutableStateOf(false) }
-    var replacingSavedKeys by rememberSaveable { mutableStateOf(false) }
     val enabled = !state.busy
 
     val allKeys = state.macOk && state.tokenOk && state.bleKeyOk
@@ -220,7 +313,7 @@ private fun MiKeysStep(
         if (!state.manualMode) {
             OutlinedTextField(
                 value = user,
-                onValueChange = { user = it },
+                onValueChange = onUserChange,
                 label = { Text("Email or phone") },
                 singleLine = true,
                 enabled = enabled,
@@ -228,13 +321,13 @@ private fun MiKeysStep(
             )
             OutlinedTextField(
                 value = pass,
-                onValueChange = { pass = it },
+                onValueChange = onPassChange,
                 label = { Text("Password") },
                 singleLine = true,
                 enabled = enabled,
                 visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
-                    TextButton(onClick = { passVisible = !passVisible }, enabled = enabled) {
+                    TextButton(onClick = { onPassVisibilityChange(!passVisible) }, enabled = enabled) {
                         Text(if (passVisible) "Hide" else "Show")
                     }
                 },
@@ -243,16 +336,7 @@ private fun MiKeysStep(
             SignInDisclosure(SignInProvider.XIAOMI)
             if (allKeys) {
                 OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            viewModel.extractKeys(
-                                user,
-                                pass,
-                                onCaptcha = onCaptcha,
-                                onSecondFactor = onSecondFactor,
-                            )
-                        }
-                    },
+                    onClick = onRefresh,
                     enabled = enabled,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -262,22 +346,6 @@ private fun MiKeysStep(
                     viewModel.setManualMode(true)
                 }
             } else {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            viewModel.extractKeys(
-                                user,
-                                pass,
-                                onCaptcha = onCaptcha,
-                                onSecondFactor = onSecondFactor,
-                            )
-                        }
-                    },
-                    enabled = enabled,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Connect Xiaomi")
-                }
                 ManualKeysButton(enabled = enabled) {
                     viewModel.setManualMode(true)
                 }
@@ -285,7 +353,7 @@ private fun MiKeysStep(
         } else {
             if (showingSavedKeys) {
                 OutlinedButton(
-                    onClick = { replacingSavedKeys = true },
+                    onClick = { onReplacingSavedKeysChange(true) },
                     enabled = enabled,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -296,7 +364,7 @@ private fun MiKeysStep(
                     value = state.manualMac,
                     onValueChange = {
                         viewModel.setManualMac(it)
-                        if (allKeys) replacingSavedKeys = true
+                        if (allKeys) onReplacingSavedKeysChange(true)
                     },
                     label = { Text("MAC address") },
                     supportingText = { Text("Example: AA:BB:CC:DD:EE:FF") },
@@ -308,7 +376,7 @@ private fun MiKeysStep(
                     value = state.manualToken,
                     onValueChange = {
                         viewModel.setManualToken(it)
-                        if (allKeys) replacingSavedKeys = true
+                        if (allKeys) onReplacingSavedKeysChange(true)
                     },
                     label = { Text("TOKEN") },
                     supportingText = { Text("24 hexadecimal characters") },
@@ -320,7 +388,7 @@ private fun MiKeysStep(
                     value = state.manualBleKey,
                     onValueChange = {
                         viewModel.setManualBleKey(it)
-                        if (allKeys) replacingSavedKeys = true
+                        if (allKeys) onReplacingSavedKeysChange(true)
                     },
                     label = { Text("BLE KEY") },
                     supportingText = { Text("32 hexadecimal characters") },
@@ -334,15 +402,6 @@ private fun MiKeysStep(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (!allKeys && !showingSavedKeys) {
-                Button(
-                    onClick = { viewModel.submitManualKeys() },
-                    enabled = enabled,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Save scale keys")
-                }
-            }
             if (!showingSavedKeys) {
                 if (replacingKeys) {
                     TextButton(
@@ -350,7 +409,7 @@ private fun MiKeysStep(
                             viewModel.setManualMac("")
                             viewModel.setManualToken("")
                             viewModel.setManualBleKey("")
-                            replacingSavedKeys = false
+                            onReplacingSavedKeysChange(false)
                         },
                         enabled = enabled,
                         modifier = Modifier.fillMaxWidth(),
@@ -383,25 +442,6 @@ private fun MiKeysStep(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-    if (allKeys) {
-        Button(
-            onClick = {
-                val continueAllowed = if (state.manualMode && (hasManualDraft || replacingSavedKeys)) {
-                    viewModel.submitManualKeys()
-                    viewModel.state.value.error == null
-                } else {
-                    true
-                }
-                if (continueAllowed) {
-                    viewModel.nextFromKeys()
-                }
-            },
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (replacingKeys) "Save keys and continue" else "Continue")
         }
     }
 }
@@ -456,14 +496,11 @@ private fun ProfileStep(state: OnboardingState, viewModel: OnboardingViewModel) 
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        InlineHelp(
+            label = "Why is the scale set to kg?",
+            detail = "Xiaomi scales use kilograms when storing readings. Your preferred display unit can be changed in Profile after setup.",
+        )
     }
-
-    StepFooter(
-        backEnabled = !state.busy,
-        back = viewModel::back,
-        nextEnabled = !state.busy,
-        next = viewModel::nextFromProfile,
-    )
 }
 
 // -------------------------------------------------------------- step 3
@@ -497,14 +534,11 @@ private fun HistoryStep(state: OnboardingState, viewModel: OnboardingViewModel) 
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        InlineHelp(
+            label = "What happens to older records?",
+            detail = "When this is selected, readings already in Garmin stay safely in the local archive but are not sent again. New readings still sync normally.",
+        )
     }
-
-    StepFooter(
-        backEnabled = !state.busy,
-        back = viewModel::back,
-        nextEnabled = !state.busy,
-        next = viewModel::nextFromHistory,
-    )
 }
 
 // -------------------------------------------------------------- step 4
@@ -516,13 +550,13 @@ private fun HistoryStep(state: OnboardingState, viewModel: OnboardingViewModel) 
 @Composable
 private fun GarminStep(
     state: OnboardingState,
-    viewModel: OnboardingViewModel,
-    scope: CoroutineScope,
-    onMfa: suspend (method: String) -> String?,
+    email: String,
+    pass: String,
+    passVisible: Boolean,
+    onEmailChange: (String) -> Unit,
+    onPassChange: (String) -> Unit,
+    onPassVisibilityChange: (Boolean) -> Unit,
 ) {
-    var email by rememberSaveable { mutableStateOf("") }
-    var pass by remember { mutableStateOf("") }
-    var passVisible by rememberSaveable { mutableStateOf(false) }
     val enabled = !state.busy
 
     if (!state.garminSignedIn) StepPanel(
@@ -531,7 +565,7 @@ private fun GarminStep(
     ) {
         OutlinedTextField(
             value = email,
-            onValueChange = { email = it },
+            onValueChange = onEmailChange,
             label = { Text("Email") },
             singleLine = true,
             enabled = enabled,
@@ -539,32 +573,19 @@ private fun GarminStep(
         )
         OutlinedTextField(
             value = pass,
-            onValueChange = { pass = it },
+            onValueChange = onPassChange,
             label = { Text("Password") },
             singleLine = true,
             enabled = enabled,
             visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {
-                TextButton(onClick = { passVisible = !passVisible }, enabled = enabled) {
+                TextButton(onClick = { onPassVisibilityChange(!passVisible) }, enabled = enabled) {
                     Text(if (passVisible) "Hide" else "Show")
                 }
             },
             modifier = Modifier.fillMaxWidth(),
         )
         SignInDisclosure(SignInProvider.GARMIN)
-        Button(
-            onClick = {
-                scope.launch {
-                    viewModel.garminSignIn(email, pass) { method ->
-                        onMfa(method) ?: throw GarminAuthError("Garmin MFA dialog cancelled")
-                    }
-                }
-            },
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Connect Garmin")
-        }
     }
     if (state.garminSignedIn) {
         StepPanel(
@@ -580,22 +601,6 @@ private fun GarminStep(
         }
     }
 
-    if (state.garminSignedIn) {
-        StepFooter(
-            backEnabled = enabled,
-            back = viewModel::back,
-            nextEnabled = enabled,
-            next = viewModel::nextFromGarmin,
-        )
-    } else {
-        OutlinedButton(
-            onClick = viewModel::back,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Back")
-        }
-    }
 }
 
 // -------------------------------------------------------------- step 5
@@ -604,37 +609,22 @@ private fun GarminStep(
 @Composable
 private fun DoneStep(
     state: OnboardingState,
-    viewModel: OnboardingViewModel,
-    scope: kotlinx.coroutines.CoroutineScope,
 ) {
     StepPanel(
         title = "Setup complete",
         supportingText = "Review your choices, then finish setting up Scale Sync.",
     ) {
-        Text("Scale keys · MAC, TOKEN and BLE KEY stored")
-        Text("Profile · ${state.heightCm} cm, age ${state.age}")
-        Text(
+        ReviewRow("Scale keys", "MAC, TOKEN and BLE KEY stored")
+        ReviewRow("Profile", "${state.heightCm} cm, age ${state.age}")
+        ReviewRow(
+            "History",
             if (state.historyAlreadySynced) {
-                "History · existing Garmin records stay archive-only"
+                "Existing Garmin records stay archive-only"
             } else {
-                "History · captured weigh-ins are ready to upload"
+                "Captured weigh-ins are ready to upload"
             },
         )
-        Text("Garmin Connect · ${state.garminUser}")
-    }
-    Button(
-        onClick = { scope.launch { viewModel.complete() } },
-        enabled = !state.busy && !state.completed,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("Finish")
-    }
-    OutlinedButton(
-        onClick = { viewModel.back() },
-        enabled = !state.busy,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("Back")
+        ReviewRow("Garmin Connect", state.garminUser)
     }
 }
 
@@ -643,21 +633,36 @@ private fun DoneStep(
 private val SEX_OPTIONS = listOf(0 to "Not specified", 1 to "Male", 2 to "Female")
 
 @Composable
-private fun StepFooter(
+private fun OnboardingFooter(
+    primaryLabel: String,
+    primaryEnabled: Boolean,
+    onPrimary: () -> Unit,
+    onBack: (() -> Unit)?,
     backEnabled: Boolean,
-    back: () -> Unit,
-    nextEnabled: Boolean,
-    next: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 3.dp,
     ) {
-        Button(onClick = next, enabled = nextEnabled, modifier = Modifier.fillMaxWidth()) {
-            Text("Continue")
-        }
-        OutlinedButton(onClick = back, enabled = backEnabled, modifier = Modifier.fillMaxWidth()) {
-            Text("Back")
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Button(
+                onClick = onPrimary,
+                enabled = primaryEnabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(primaryLabel)
+            }
+            onBack?.let { back ->
+                TextButton(onClick = back, enabled = backEnabled) { Text("Back") }
+            }
         }
     }
 }
@@ -669,19 +674,73 @@ private fun StepPanel(
     supportingText: String,
     content: @Composable () -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(title, style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    supportingText,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            content()
+        }
+    }
+}
+
+/** A compact disclosure that keeps optional explanation out of the main path. */
+@Composable
+private fun InlineHelp(label: String, detail: String) {
+    var expanded by rememberSaveable(label) { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        TextButton(onClick = { expanded = !expanded }) {
+            Text(if (expanded) "Hide details" else label)
+        }
+        if (expanded) {
             Text(
-                supportingText,
-                style = MaterialTheme.typography.bodyLarge,
+                detail,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        content()
+    }
+}
+
+@Composable
+private fun OnboardingError(message: String) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { liveRegion = LiveRegionMode.Assertive },
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+    ) {
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
+}
+
+@Composable
+private fun ReviewRow(label: String, detail: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("✓  $label", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Text(
+            detail,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -67,8 +67,8 @@ The wizard walks you through five steps:
    - **BLE KEY** (32 hex characters) — used to decrypt the scale's broadcasts.
 
    If Xiaomi asks for a verification code (email/SMS 2FA) or a captcha, the
-   app shows a dialog for it. Already have the keys from another tool? Use
-   **I already have the keys** and paste them.
+   app shows a dialog for it. Already have the keys from another tool? Choose
+   **Enter keys manually** and paste them.
 2. **Profile.** Height, age and sex (sent to the scale so it can recognise
    you).
 3. **History question.** See "Coming from a previous setup" below.
@@ -77,8 +77,9 @@ The wizard walks you through five steps:
 5. **Done.** Open Home, allow Bluetooth access, and step on the scale.
 
 Everything can be changed later on the **Profile** tab: re-extract keys,
-sign in to Garmin again, edit your profile, or switch between light and dark
-appearance. Android 12 and newer follow the device's wallpaper colors.
+sign in to Garmin again, or edit your profile. Scale Sync follows your
+system's light or dark appearance. Android 12 and newer use the device's
+Material color palette; older versions use the app's built-in palette.
 
 ## Coming from a previous setup
 
